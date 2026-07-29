@@ -111,6 +111,63 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
     expect(readFileSync(join(guardedRoot, ".deepagents", "AGENTS.md"), "utf8")).toBe("original\n");
   });
 
+  test("a relative write path is recoverable so the agent can retry with an absolute path", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "da-relative-path-"));
+    mkdirSync(join(rootDir, "demo"), { recursive: true });
+    const agent = buildAgent({
+      model: new FakeToolCallingModel({
+        toolCalls: [
+          [
+            {
+              name: "write_file",
+              args: {
+                file_path: "demo/E2E_HELLO.md",
+                content: "Hello from E2E.\n",
+              },
+              id: "relative-write",
+            },
+          ],
+          [
+            {
+              name: "write_file",
+              args: {
+                file_path: "/demo/E2E_HELLO.md",
+                content: "Hello from E2E.\n",
+              },
+              id: "absolute-retry",
+            },
+          ],
+          [],
+        ],
+      }),
+      rootDir,
+      mode: "implement",
+      systemPrompt: "Create the requested file and correct recoverable tool errors.",
+      allowedCommands: ["echo"],
+      deniedCommands: [],
+      shellTimeoutSeconds: 5,
+      toolCallRecord: [],
+    });
+
+    const result = await agent.invoke({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Create demo/E2E_HELLO.md containing a single short greeting line. Do not modify any other files.",
+        },
+      ],
+    });
+    const relativePathError = result.messages.find(
+      (message): message is ToolMessage =>
+        message instanceof ToolMessage && message.tool_call_id === "relative-write",
+    );
+
+    expect(relativePathError?.status).toBe("error");
+    expect(relativePathError?.content).toContain('path must be absolute: "demo/E2E_HELLO.md"');
+    expect(readFileSync(join(rootDir, "demo", "E2E_HELLO.md"), "utf8")).toBe("Hello from E2E.\n");
+  });
+
   test("review mode writes only to isolated output and exposes no edit or execute capability", async () => {
     const reviewRoot = mkdtempSync(join(tmpdir(), "da-review-root-"));
     const reviewOutputDir = mkdtempSync(join(tmpdir(), "da-review-output-"));
