@@ -1,1 +1,1 @@
-This is a protected file for E2E testing.
+This file is protected for E2E testing purposes.
