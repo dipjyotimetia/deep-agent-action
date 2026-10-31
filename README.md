@@ -39,7 +39,7 @@ Comment `@agent fix the failing test` on an issue and get a pull request back. C
 | **Setup**         | Copy one workflow, add one secret. No app install wizard, no hosted backend.                                                                                                     |
 | **Where it runs** | In-process on your runner — your code never leaves your CI.                                                                                                                      |
 | **Models**        | 8 providers: Anthropic, OpenAI, Azure OpenAI, Google Gemini, OpenRouter, any OpenAI-compatible endpoint, AWS Bedrock, GCP Vertex AI.                                             |
-| **Safety**        | Command allow/deny guardrails, secret-free shell, fork-PR protection, permission gating, approval-gated landing by default, protected paths, and optional cost/token spend caps. |
+| **Safety**        | Command allow/deny guardrails, curated shell environment, optional Docker sandbox, fork-PR protection, permission gating, approval-gated landing by default, protected paths, and optional cost/token spend caps. |
 | **Feedback**      | A single sticky comment shows a live plan, progress, the PR link, and token/cost estimates.                                                                                      |
 
 ## Features
@@ -59,7 +59,7 @@ Comment `@agent fix the failing test` on an issue and get a pull request back. C
 - 🧠 **Cross-run memory** — a compact history of prior `@agent` turns on the same issue/PR is carried forward as context on the next mention. No backend; stored in the sticky comment.
 - 🧩 **Deepagents memory and skills** — repository-local `.deepagents/AGENTS.md` is loaded as read-only guidance, while `.deepagents/skills/` exposes progressive-disclosure `SKILL.md` workflows to the agent.
 - 🧑‍🔬 **Specialist subagents** — opt into named synchronous specialists for focused work, with static model selection, scoped MCP tools, repository skills, structured findings, and the same approval controls.
-- 🛡️ **Shell guardrails** — an allow-list and an always-on deny-list for shell commands, plus a secret-free environment.
+- 🛡️ **Shell guardrails** — an allow-list and an always-on deny-list for shell commands, a curated environment, and an optional Docker sandbox.
 - 🍴 **Fork-PR protection** — fork PRs are denied by default; maintainers opt in per-PR with a label.
 - 🧰 **MCP tools** — connect Model Context Protocol servers to extend what the agent can do.
 - 🚀 **Zero-config** — sensible defaults for everything; the only required secret is your model provider key.
@@ -223,13 +223,16 @@ All inputs are optional.
 | `auto_run_assignee`            | GitHub username that, when assigned to an issue, runs the agent without a trigger-phrase match.                                                                                                                             | —                       |
 | `auto_run_default_instruction` | Fallback instruction for an auto-run event when the issue has no usable title/body text.                                                                                                                                    | —                       |
 | `shell_timeout_seconds`        | Max seconds for a single shell command.                                                                                                                                                                                     | `600`                   |
+| `shell_sandbox`                | Where shell commands run: `none` (on the runner) or `docker` (throwaway container, no access to action secrets).                                                                                                            | `none`                  |
+| `shell_sandbox_image`          | Container image providing your toolchain, pinned by digest. Required with `docker`.                                                                                                                                         | —                       |
+| `shell_sandbox_network`        | Container network: `none` or `bridge`.                                                                                                                                                                                      | `none`                  |
 | `comment_debounce_ms`          | Minimum interval between tracking-comment progress edits.                                                                                                                                                                   | `8000`                  |
 | `provider_api_key`             | Model provider API key. Also read from `PROVIDER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `OPENROUTER_API_KEY`.                                                                               | —                       |
 | `app_id`                       | GitHub App id used to mint a scoped installation token. Also read from `APP_ID`.                                                                                                                                            | —                       |
 | `app_private_key`              | GitHub App private key (PEM). Also read from `APP_PRIVATE_KEY`.                                                                                                                                                             | —                       |
 | `github_token`                 | Token for GitHub API/git operations.                                                                                                                                                                                        | `${{ github.token }}`   |
 | `require_push_approval`        | Gate landing of changes behind human review (draft PR / proposed branch).                                                                                                                                                   | `true`                  |
-| `protected_paths`              | Extra repository-relative globs the agent may modify during a run but can never publish. Agent guidance and repo config paths are always protected.                                                                         | —                       |
+| `protected_paths`              | Extra repository-relative globs the agent may modify during a run but can never publish. Agent guidance, repo config paths, and `.github/workflows` are always protected.                                                                         | —                       |
 | `verified_commits`             | Land via the GitHub App's `createCommitOnBranch` GraphQL mutation so commits show as "Verified". Requires `app_id`/`app_private_key`.                                                                                       | `false`                 |
 | `enable_triage`                | Enable the label-backed lifecycle for unmentioned issues.                                                                                                                                                                    | `false`                 |
 | `triage_label_*`               | Names for visible lifecycle labels, including needs-reproduction, needs-maintainer, and fix-proposed. Labels must already exist in the target repository.                                                                      | `triage: …`             |
@@ -293,12 +296,13 @@ The agent runs untrusted, model-generated commands, so the action is defensive b
 
 - **Permission gating** — only human collaborators with `write`/`admin` (configurable) can trigger it; bot accounts are ignored to prevent loops.
 - **Fork-PR protection** — fork PRs are denied unless a maintainer applies the `fork_allow_label`.
-- **Secret-free shell** — the agent's shell sees an allow-listed, secret-free environment; provider keys and `GITHUB_TOKEN` are never exposed to it.
+- **Curated shell environment** — provider keys and `GITHUB_TOKEN` are never placed in the shell's environment. Set `shell_sandbox: docker` to put them out of reach entirely.
 - **Command guardrails** — an allow-list plus an always-on deny-list (network/privilege tools are blocked even if allow-listed), enforced at the shared backend for the main agent and delegated subagents.
 - **Human-approval gate** — landing is approval-gated by default; set `require_push_approval: false` only for deliberate direct updates.
+- **Tamper-resistant landing** — before committing, the control plane stops everything the agent started, restores Git configuration, and folds any agent commits into one reviewed change.
 - **Repository guidance boundary** — only `.deepagents/AGENTS.md` and `.deepagents/skills/` are loaded by deepagents; their built-in filesystem writes are denied, protected paths cannot be published, and issue/PR text remains separate untrusted data.
 
-This is a guardrail model, not a sandbox: allowed commands execute directly on the runner. Run it on the providers and repos you trust. See [docs/security.md](docs/security.md) for the full threat model, and [SECURITY.md](SECURITY.md) to report a vulnerability.
+By default this is a guardrail model, not a sandbox: allowed commands execute directly on the runner. Use `shell_sandbox: docker` for real isolation, and run it on the providers and repos you trust. See [docs/security.md](docs/security.md) for the full threat model, and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Examples
 
@@ -332,6 +336,10 @@ A few common cases — full guide in [docs/troubleshooting.md](docs/troubleshoot
 - Replace global `apply_suggestions: true` with an explicit `@agent review and fix` request.
 - Remove `interrupt_on` and the reserved bridge inputs; an ephemeral runner cannot provide durable tool approval or hosted execution.
 - Review any automation that expected direct landing: `require_push_approval` now defaults to `true`.
+- The agent can no longer change `.github/workflows/**` through this action, run `git commit`/`push`/`config`, or use `$(...)` in shell commands. Its commits are folded into one control-plane commit.
+- Fork PRs approved with `fork_allow_label` always land as a proposed branch, and ignore the fork's `.deepagents` guidance.
+- A review run that doesn't return a result now fails instead of posting an empty review.
+- `actions/checkout` credentials are removed for the rest of the job, so later steps that need them must authenticate themselves.
 
 Pin to a ref you trust. `@main` tracks the latest:
 

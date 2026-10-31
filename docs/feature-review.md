@@ -4,17 +4,17 @@ A point-in-time audit of the action's feature surface against best practices for
 
 ## Strengths
 
-- **Control-plane security model.** Gating (fork protection, human check, permission check) runs before the agent; landing (commit/branch/push/PR) runs after it — the model never holds credentials or runs git. See [security.md](security.md).
-- **Secret-free agent shell by construction.** `src/agent/env.ts` is an allow-list of env var names; provider keys, `GITHUB_TOKEN`, App keys, and `INPUT_*` can never reach a model-directed command.
-- **Unweakenable command deny-list.** A committed `.github/deep-agent.yml` can narrow the allow-list and add denials, but the built-in deny-list is always re-merged (`src/config.ts`).
+- **Control-plane security model.** Gating (fork protection, human check, permission check) runs before the agent; landing (commit/branch/push/PR) runs after it, and treats the checkout as tampered. See [security.md](security.md).
+- **Optional container isolation.** `shell_sandbox: docker` gives shell commands no network, no access to the action's secrets, and a read-only `.git`. Without it, `src/agent/env.ts` keeps secrets out of the shell's environment, but not out of reach of allow-listed interpreters.
+- **Unweakenable command deny-list.** Execution policy is workflow-owned, and the built-in deny-list is always merged (`src/config.ts`). `.github/deep-agent.yml` supports only `system_prompt`.
 - **Budget metering that counts subagents.** The `BudgetMeter` is a LangChain callback (not a stream-loop check), so subagent token spend is metered too, and a breach aborts mid-subagent. Budget/runtime stops land partial work through the approval path instead of losing it.
 - **Sticky tracking comment with live plan + cross-run memory.** One comment per thread, updated in place, carrying a hidden, base64-encoded turn history that is fed back fenced as _data, not instructions_ (prompt-injection guard, `src/github/memory.ts`).
 - **Deepagents-native project policy.** Repository `.deepagents/AGENTS.md` memory and progressive-disclosure skills are wired through the backend, with strict profile/permission validation and an always-on write-protection floor for `.deepagents/`.
-- **Current Deepagents core harness.** The action runs `deepagents` 1.12.1 with built-in todo planning, filesystem read/write/edit/delete tools, automatic context management, and synchronous task delegation. It exposes model harness profiles, filesystem policy, repository skills, and specialist subagents without replacing the action-owned security boundary.
+- **Current Deepagents core harness.** The action runs `deepagents` 1.16 with todo planning (opt-in upstream since 1.12), filesystem read/write/edit/delete tools, automatic context management, and synchronous task delegation. It exposes model harness profiles, filesystem policy, repository skills, and specialist subagents without replacing the action-owned security boundary. `test/agentContract.test.ts` runs against the real graph, so upstream changes to any of this fail CI.
 - **Honest lifecycle.** Unsupported ephemeral-runner HITL controls were removed; MCP is explicitly workflow-owned and approval-gated landing protects repository changes.
 - **Safe repository bootstrap.** `npx create-deep-agent-action` creates a pinned, least-privilege workflow and optional read-only guidance without handling provider secrets or GitHub administration.
 - **Typed activity visibility.** Tool calls and results from main and subagent streams are deduplicated into the tracking comment and audit record.
-- **Static provider imports + smoke check.** All 8 providers are constructed via static imports; CI's smoke step catches the provider-package-loading class of bug that unit tests cannot.
+- **Static provider imports + smoke check.** All 8 providers are constructed via static imports; CI's smoke step constructs each of them, catching the provider-package-loading class of bug that unit tests cannot.
 - **Auditability.** Every run emits `result_json`, a job summary, and a retained `deep-agent-run.json` artifact recording the plan, every tool call (including blocked ones and why), files changed, tokens, and cost.
 - **Honest docs.** Documented inputs map to real execution behavior; inert bridge-mode inputs are not exposed.
 
@@ -41,7 +41,7 @@ These are real gaps versus the strongest agentic actions, each big enough to des
 - **Hosted bridge mode.** Not exposed until it has an implemented, tested runtime contract.
 - **Async remote subagents.** Deepagents can coordinate non-blocking remote Agent Protocol workers, but that requires a durable service endpoint, its own authentication, lifecycle, and cost controls. A single ephemeral Actions job cannot safely provide those guarantees.
 - **Persistent checkpointers and stores.** Long-lived LangGraph state, durable tool interrupts, and writable cross-run memory need a scoped backing service and conflict/security policy. This action intentionally uses bounded sticky-comment continuity plus read-only repository guidance instead.
-- **A real sandbox backend.** The shell guard is a guardrail, not a sandbox: allow-listed interpreters (`node`, `python`, `go`, …) can open sockets, so network isolation ultimately rests on the secret-free env. A container/jail execution backend would make the "no network" property enforceable.
 - **Cost-table coverage.** `src/agent/cost.ts` prices the major Anthropic/OpenAI/Gemini families; Bedrock/Vertex model ids and newer models fall back to token-only reporting (pair `max_cost_usd` with `max_total_tokens` meanwhile).
+- **Sandboxing by default.** `shell_sandbox` stays opt-in because the container image must supply each repository's toolchain. MCP tools also still run on the host.
 - **Budget fail-open on silent providers.** A provider reporting neither `usage_metadata` nor `llmOutput.tokenUsage` contributes zero to the meter, so token caps can't bind for it. `max_runtime_minutes` now provides a provider-independent backstop.
 - **Cancellation handling.** A cancelled workflow job currently strands the tracking comment on "Working on it…"; a small cleanup path (or a `cancel-in-progress` note) would close the loop.

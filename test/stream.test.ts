@@ -269,6 +269,75 @@ describe("runAgentStream", () => {
     expect(result.stopped).toBeUndefined();
   });
 
+  test("a file edit resets repeated-call tracking without any todo change", async () => {
+    const run = (id: string) =>
+      new AIMessage({
+        content: "",
+        tool_calls: [{ name: "execute", args: { command: "npm test" }, id }],
+      });
+    const edit = (id: string) =>
+      new AIMessage({
+        content: "",
+        tool_calls: [{ name: "edit_file", args: { file_path: `/${id}`, old_string: "a" }, id }],
+      });
+    const result = await runAgentStream(
+      fakeAgent([
+        { messages: [run("r1"), run("r2")] },
+        { messages: [run("r1"), run("r2"), edit("e1")] },
+        { messages: [run("r1"), run("r2"), edit("e1"), run("r3"), run("r4")] },
+      ]),
+      {},
+      { ...opts, maxRepeatedToolCalls: 3 },
+    );
+    expect(result.stopped).toBeUndefined();
+  });
+
+  test("the same edit repeating still stalls", async () => {
+    const edit = (id: string) =>
+      new AIMessage({
+        content: "",
+        tool_calls: [{ name: "edit_file", args: { file_path: "/a", old_string: "a" }, id }],
+      });
+    const result = await runAgentStream(
+      fakeAgent([{ messages: [edit("1"), edit("2"), edit("3")] }]),
+      {},
+      { ...opts, maxRepeatedToolCalls: 3 },
+    );
+    expect(result.stopped).toBe("stalled");
+  });
+
+  test("surfaces the main agent's structured response but not a subagent's", async () => {
+    const result = await runAgentStream(
+      fakeAgent([
+        [["subagent"], { messages: [], structuredResponse: { from: "subagent" } }],
+        { messages: [], structuredResponse: { from: "main" } },
+      ]),
+      {},
+      opts,
+    );
+    expect(result.structuredResponse).toEqual({ from: "main" });
+  });
+
+  test("meters usage and cost with no budget configured", async () => {
+    const agent = {
+      stream: async function* (_input: unknown, config: any) {
+        config.callbacks[0].handleLLMEnd(llmEnd(1_000_000, 0));
+        yield { messages: [new AIMessage("done")] };
+      },
+    };
+    const result = await runAgentStream(
+      agent,
+      {},
+      {
+        ...opts,
+        budget: { model: "anthropic:claude-sonnet-4-6" },
+      },
+    );
+    expect(result.tokens).toEqual({ input: 1_000_000, output: 0 });
+    expect(result.costUsd).toBe(3);
+    expect(result.stopped).toBeUndefined();
+  });
+
   test("does not collide repeated calls with different arguments or namespaces", async () => {
     const rootRead = new AIMessage({
       content: "",

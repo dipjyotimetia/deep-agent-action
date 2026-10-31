@@ -1,5 +1,17 @@
 import { execFileSync } from "node:child_process";
+import {
+  accessSync,
+  constants,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { devNull } from "node:os";
+import { basename, delimiter, isAbsolute, join, resolve } from "node:path";
 import { githubServerUrl, type Octokit } from "./client.js";
+import { isUntrustedPrHead } from "./fork.js";
 import { truncateBody } from "./text.js";
 import type { GitHubContext } from "../types.js";
 
@@ -55,8 +67,86 @@ class GitCommandError extends Error {
   }
 }
 
+/** Environment names control-plane Git may see; none carry action secrets. */
+const GIT_ENV_ALLOWLIST = [
+  "PATH",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "GIT_SSL_CAINFO",
+  "SSL_CERT_FILE",
+];
+
 /**
- * Run git with arguments (no shell — args are passed directly, injection-safe).
+ * The environment for control-plane Git. It omits every secret, in case Git runs
+ * something the agent planted, and ignores system and user-level configuration,
+ * because the agent's shell can write to `~/.gitconfig`.
+ */
+export function controlPlaneGitEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of GIT_ENV_ALLOWLIST) {
+    const value = source[name];
+    if (value) env[name] = value;
+  }
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = devNull;
+  env.GIT_TERMINAL_PROMPT = "0";
+  return env;
+}
+
+/**
+ * Options that switch off Git's ways of running configured programs. Command-line
+ * scope outranks anything the agent could write to repository configuration.
+ * `safe.directory` replaces the runner-level entry that container jobs rely on,
+ * now that user-level configuration is ignored.
+ */
+export function controlPlaneGitOptions(rootDir: string): string[] {
+  return [
+    "-c",
+    `core.hooksPath=${devNull}`,
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    `safe.directory=${resolve(rootDir)}`,
+  ];
+}
+
+let gitBinary: string | undefined;
+
+/**
+ * Find the Git executable once, on first use, before any agent runs. Later
+ * lookups must not consult `PATH`: the agent's shell can write to directories on
+ * it, and a planted `git` would receive the tokenized remote URLs.
+ */
+function resolveGitBinary(): string {
+  if (gitBinary) return gitBinary;
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!isAbsolute(dir)) continue;
+    for (const name of process.platform === "win32" ? ["git.exe"] : ["git"]) {
+      const candidate = join(dir, name);
+      try {
+        accessSync(candidate, constants.X_OK);
+        gitBinary = candidate;
+        return candidate;
+      } catch {
+        // Keep looking.
+      }
+    }
+  }
+  throw new Error("Could not find a git executable on PATH.");
+}
+
+/**
+ * Run git with arguments (no shell — args are passed directly, injection-safe),
+ * hardened against anything the agent may have left behind in the checkout.
  * Failures are rethrown with the stderr detail (execFileSync puts it on the
  * error object, not in `message`) and any authenticated remote URL redacted:
  * git errors can echo the tokenized URL, and the message lands in the tracking
@@ -65,7 +155,13 @@ class GitCommandError extends Error {
  */
 export function runGit(args: string[], cwd: string): string {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+    return execFileSync(resolveGitBinary(), [...controlPlaneGitOptions(cwd), ...args], {
+      cwd,
+      env: controlPlaneGitEnv(),
+      encoding: "utf8",
+      // Capture stderr instead of echoing it: it can contain the tokenized URL.
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   } catch (err) {
     const e = err as { stderr?: unknown; message?: string; status?: unknown };
     const detail =
@@ -190,10 +286,124 @@ export function checkoutIssueBranchIfExists(
   return true;
 }
 
-/** Files with uncommitted changes in the workspace. */
+/**
+ * Files with uncommitted changes in the workspace. Untracked directories are
+ * expanded so a protected file can't hide behind its new parent (`?? .github/`).
+ */
 export function listChangedFiles(rootDir: string): string[] {
-  const out = runGit(["status", "--porcelain=v1", "-z"], rootDir);
+  const out = runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all"], rootDir);
   return changedPathsFromPorcelain(out);
+}
+
+/** What the Git directory looked like before the agent ran. */
+export interface GitTrustSnapshot {
+  /** The commit the agent started from. */
+  startSha: string;
+  gitDir: string;
+  gitConfig: Buffer;
+}
+
+/**
+ * Record the Git state to restore after the agent exits. Call this after the
+ * control plane's checkout and credential stripping, immediately before the
+ * agent starts: everything Git would later trust must come from this snapshot.
+ */
+export function captureGitTrust(rootDir: string): GitTrustSnapshot {
+  const startSha = runGit(["rev-parse", "HEAD"], rootDir);
+  const gitDir = join(rootDir, ".git");
+  if (!lstatSync(gitDir).isDirectory()) {
+    throw new Error("Expected a standard checkout: .git is not a directory.");
+  }
+  return { startSha, gitDir, gitConfig: readFileSync(join(gitDir, "config")) };
+}
+
+/**
+ * Put back what the agent must not influence, before the control plane runs any
+ * further Git command. `.git/config` decides which programs Git runs and where
+ * remote URLs resolve, so a rewritten one could capture the push token. Throws
+ * when the Git directory itself was redirected, since Git would then read its
+ * configuration from a location the agent chose.
+ */
+export function restoreGitTrust(snapshot: GitTrustSnapshot): void {
+  const { gitDir, gitConfig } = snapshot;
+  if (!lstatSync(gitDir).isDirectory()) {
+    throw new Error("Refusing to land: the agent replaced the .git directory.");
+  }
+  for (const redirect of ["commondir", "gitdir"]) {
+    if (exists(join(gitDir, redirect))) {
+      throw new Error(`Refusing to land: the agent added .git/${redirect}.`);
+    }
+  }
+  rmSync(join(gitDir, "config"), { force: true, recursive: true });
+  writeFileSync(join(gitDir, "config"), gitConfig);
+  rmSync(join(gitDir, "config.worktree"), { force: true, recursive: true });
+}
+
+function exists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fold any commits the agent made back into uncommitted changes. Landing then
+ * publishes exactly one control-plane commit, and the protected-path check sees
+ * every change, not only what was left uncommitted. HEAD must still descend from
+ * where the agent started: after a switch to another branch, the difference from
+ * the start would be that branch's history, published as if it were the agent's
+ * edit (reverting the PR, for instance).
+ */
+export function flattenAgentCommits(rootDir: string, startSha: string): void {
+  if (runGit(["rev-parse", "HEAD"], rootDir) === startSha) return;
+  try {
+    runGit(["merge-base", "--is-ancestor", startSha, "HEAD"], rootDir);
+  } catch {
+    throw new Error("Refusing to land: the agent moved HEAD off the commit it started from.");
+  }
+  runGit(["reset", "--soft", startSha], rootDir);
+}
+
+/** Credential files written by current `actions/checkout`, referenced through an include. */
+const CHECKOUT_CREDENTIALS_FILE = /^git-credentials-.*\.config$/;
+
+/**
+ * Remove includes pointing at `actions/checkout`'s credential files, then the
+ * files themselves: the token sits in them in plain base64, under a directory the
+ * agent's shell can read. The action's post step tolerates them being gone.
+ */
+function removeCheckoutCredentialFiles(rootDir: string, runnerTemp: string | undefined): void {
+  const files = new Set<string>();
+  try {
+    const entries = runGit(
+      ["config", "--local", "--null", "--get-regexp", "^include(if\\..*)?\\.path$"],
+      rootDir,
+    )
+      .split("\0")
+      .filter(Boolean);
+    for (const entry of entries) {
+      const separator = entry.indexOf("\n");
+      const key = entry.slice(0, separator);
+      const path = entry.slice(separator + 1);
+      if (!CHECKOUT_CREDENTIALS_FILE.test(basename(path))) continue;
+      runGit(["config", "--local", "--unset-all", key], rootDir);
+      files.add(path);
+    }
+  } catch {
+    // No includes is the common case outside current actions/checkout.
+  }
+  if (runnerTemp) {
+    try {
+      for (const name of readdirSync(runnerTemp)) {
+        if (CHECKOUT_CREDENTIALS_FILE.test(name)) files.add(join(runnerTemp, name));
+      }
+    } catch {
+      // A missing temp directory holds no credentials.
+    }
+  }
+  for (const file of files) rmSync(file, { force: true });
 }
 
 /**
@@ -201,7 +411,12 @@ export function listChangedFiles(rootDir: string): string[] {
  * allow-listed `git` commands. Control-plane fetch/push uses explicit tokenized
  * URLs, never the checkout's local credential configuration.
  */
-export function stripCheckoutCredentials(rootDir: string, originUrl?: string): void {
+export function stripCheckoutCredentials(
+  rootDir: string,
+  originUrl?: string,
+  runnerTemp: string | undefined = process.env.RUNNER_TEMP,
+): void {
+  removeCheckoutCredentialFiles(rootDir, runnerTemp);
   try {
     const keys = runGit(
       ["config", "--local", "--name-only", "--get-regexp", "^http\\..*\\.extraheader$"],
@@ -253,9 +468,26 @@ export function proposedBranchName(ctx: GitHubContext, suffix: string): string {
   return sanitizeBranchName(`deep-agent/proposed/${ctx.entityNumber}-${suffix}`);
 }
 
-/** Compare-view URL between the PR's head and a proposed branch. */
+/**
+ * Compare-view URL between the PR's head and a proposed branch. A fork's head
+ * branch must be qualified with its owner: the name alone would resolve to an
+ * unrelated branch in this repository.
+ */
 export function compareUrl(ctx: GitHubContext, headRef: string, proposed: string): string {
-  return `${githubServerUrl()}/${ctx.owner}/${ctx.repo}/compare/${headRef}...${proposed}?expand=1`;
+  const headOwner = ctx.prHeadRepoFullName?.split("/")[0];
+  const base = isUntrustedPrHead(ctx) && headOwner ? `${headOwner}:${headRef}` : headRef;
+  return `${githubServerUrl()}/${ctx.owner}/${ctx.repo}/compare/${base}...${proposed}?expand=1`;
+}
+
+/**
+ * Reject a direct push when the head isn't this repository's branch. A fork PR's
+ * head ref names a branch in the fork, and pushing to that name here would write
+ * to whatever same-named branch this repository has, possibly `main`.
+ */
+export function assertDirectPushAllowed(ctx: GitHubContext): void {
+  if (isUntrustedPrHead(ctx)) {
+    throw new Error("Refusing to push to a fork PR's branch name in the base repository.");
+  }
 }
 
 /** The PR body used when opening a new issue/dispatch-mode pull request. */
@@ -335,22 +567,33 @@ export interface LandResult {
 }
 
 /**
- * Check out a PR's head branch before the agent runs. `actions/checkout`
- * leaves the default branch checked out for `issue_comment` events, so in PR
- * mode we must fetch and switch to the PR head — otherwise the agent edits the
- * wrong tree and the later push is a non-fast-forward. Same-repo PRs only
- * (fork PRs are blocked earlier by fork protection).
+ * Which ref to fetch for a PR, and the local branch to hold it. A label-approved
+ * fork PR's branch doesn't exist in this repository, and a same-named one here
+ * is unrelated code, so its head can only be addressed through `refs/pull`.
  */
-export function checkoutPrHead(
-  rootDir: string,
-  token: string,
-  owner: string,
-  repo: string,
-  ref: string,
-): void {
-  const url = pushUrl(token, owner, repo);
-  runGit(["fetch", "--depth=1", url, ref], rootDir);
-  runGit(["checkout", "-B", ref, "FETCH_HEAD"], rootDir);
+export function prCheckoutSpec(ctx: GitHubContext): { fetchRef: string; localBranch: string } {
+  if (isUntrustedPrHead(ctx)) {
+    if (ctx.entityNumber == null) throw new Error("A fork PR checkout requires a PR number.");
+    return {
+      fetchRef: `refs/pull/${ctx.entityNumber}/head`,
+      localBranch: `deep-agent/pr-${ctx.entityNumber}-head`,
+    };
+  }
+  if (!ctx.prHeadRef) throw new Error("PR checkout requires a resolved head branch.");
+  return { fetchRef: ctx.prHeadRef, localBranch: ctx.prHeadRef };
+}
+
+/**
+ * Check out a PR's head before the agent runs. `actions/checkout` leaves the
+ * default branch checked out for `issue_comment` events, so in PR mode we must
+ * fetch and switch to the PR head — otherwise the agent edits the wrong tree and
+ * the later push is a non-fast-forward.
+ */
+export function checkoutPrHead(rootDir: string, token: string, ctx: GitHubContext): void {
+  const { fetchRef, localBranch } = prCheckoutSpec(ctx);
+  const url = pushUrl(token, ctx.owner, ctx.repo);
+  runGit(["fetch", "--depth=1", url, fetchRef], rootDir);
+  runGit(["checkout", "-B", localBranch, "FETCH_HEAD"], rootDir);
 }
 
 /**
@@ -404,7 +647,7 @@ export async function landChanges(params: {
       const compare = compareUrl(ctx, ctx.prHeadRef, proposed);
       return { filesChanged, branch: proposed, prUrl: compare, approvalPending: true };
     }
-    // Push to the existing PR branch (same-repo only).
+    assertDirectPushAllowed(ctx);
     runGitPush(["push", url, `HEAD:refs/heads/${ctx.prHeadRef}`], rootDir);
     return { filesChanged, branch: ctx.prHeadRef };
   }
@@ -414,12 +657,7 @@ export async function landChanges(params: {
   // off the current HEAD and open a new PR.
   const branch = generateBranchName(ctx, branchSuffix);
   const baseBranch = params.baseBranch ?? runGit(["rev-parse", "--abbrev-ref", "HEAD"], rootDir);
-  if (params.continuingBranch) {
-    runGitPush(["push", url, `HEAD:refs/heads/${branch}`], rootDir);
-  } else {
-    runGit(["branch", branch], rootDir);
-    runGitPush(["push", url, `${branch}:refs/heads/${branch}`], rootDir);
-  }
+  runGitPush(["push", url, `HEAD:refs/heads/${branch}`], rootDir);
 
   // Reuse an existing (non-merged) PR for this branch instead of opening a
   // second one for the same issue.

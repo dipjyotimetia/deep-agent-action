@@ -82,6 +82,11 @@ describe("deepagents policy defaults", () => {
       mode: "deny",
     });
     expect(permissions[1]).toEqual({
+      operations: ["read", "write"],
+      paths: ["/.git", "/.git/**"],
+      mode: "deny",
+    });
+    expect(permissions.at(-1)).toEqual({
       operations: ["write"],
       paths: ["/**"],
       mode: "allow",
@@ -163,7 +168,6 @@ describe("deepagents policy defaults", () => {
         model: fakeModel().respond(new AIMessage("review")),
         rootDir: mkdtempSync(join(tmpdir(), "deep-agent-review-subagent-")),
         mode: "review",
-        reviewOutputDir: join(tmpdir(), "deep-agent-review-output"),
         systemPrompt: "test",
         allowedCommands: ["echo"],
         deniedCommands: [],

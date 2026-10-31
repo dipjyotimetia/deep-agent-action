@@ -44,7 +44,7 @@ All inputs are optional. Source of truth: [`action.yml`](../action.yml).
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `require_push_approval` | `true`  | Gate landing behind human review: draft PR (issue mode) or a proposed branch + compare link (PR mode). Set `false` only when direct landing is intentional.                                                                                                                                                                                                                                             |
 | `verified_commits`      | `false` | Land via the GitHub App's `createCommitOnBranch` GraphQL mutation instead of `git push`, so commits show as "Verified". **Requires** `app_id`/`app_private_key` — the run fails loudly if set without App auth (no silent fallback to unsigned commits). **Limitation:** the mutation has no file-mode field, so executable-bit/symlink changes are not preserved (files always land as mode `100644`). |
-| `protected_paths`       | —       | Comma/newline-separated repository-relative globs that must never be published. This extends the immutable floor protecting `.deepagents/**` and recognized deep-agent config paths.                                                                                                                                                                                                                    |
+| `protected_paths`       | —       | Comma/newline-separated repository-relative globs that must never be published. This extends the immutable floor protecting `.deepagents/**`, recognized deep-agent config paths, and `.github/workflows/**`.                                                                                                                                                                                                                    |
 
 ### Triage (opt-in)
 
@@ -61,6 +61,9 @@ All inputs are optional. Source of truth: [`action.yml`](../action.yml).
 | `allowed_commands`      | dev toolchain (below) | Comma/newline-separated allow-list. Setting it **replaces** the default list. |
 | `denied_commands`       | —                     | Extra names to block. Always **merged with** the built-in deny-list.          |
 | `shell_timeout_seconds` | `600`                 | Max seconds per shell command.                                                |
+| `shell_sandbox`         | `none`                | `docker` runs each shell command in a throwaway container with no capabilities, no access to action secrets, and a read-only `.git`. See [security.md](security.md#what-shell_sandbox-docker-adds). |
+| `shell_sandbox_image`   | —                     | Image providing your toolchain, pinned by digest. Required with `docker`.     |
+| `shell_sandbox_network` | `none`                | Container network: `none` or `bridge` (needed if commands install dependencies). |
 
 **Default allow-list** (from [`src/config.ts`](../src/config.ts)):
 
@@ -149,7 +152,7 @@ Set these under `env:` (usually from `secrets`). Provider keys can come from a g
 
 Resolution order for the provider key: `provider_api_key` input → `PROVIDER_API_KEY` → `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY` → `OPENROUTER_API_KEY`. See [providers.md](providers.md) for per-provider detail.
 
-> The agent's **shell** never sees these. Secrets are stripped from the agent environment by construction — see [security.md](security.md#3-secret-free-shell).
+> These are never placed in the agent **shell's** environment. For isolation beyond that, use `shell_sandbox: docker` — see [security.md](security.md#3-shell-environment).
 
 ---
 

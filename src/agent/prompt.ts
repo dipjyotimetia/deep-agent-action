@@ -1,5 +1,4 @@
 import type { GitHubContext } from "../types.js";
-import { REVIEW_FINDINGS_PATH } from "../github/review.js";
 
 /**
  * Build the system prompt that sets the agent's role and conventions. The
@@ -13,7 +12,8 @@ export function buildSystemPrompt(ctx: GitHubContext, opts: { isPRMode: boolean 
     `and run shell commands via the \`execute\` tool. Your shell has no credentials or secrets, and`,
     `network-fetch commands (curl, wget, ssh, …) are blocked — do not attempt to push, fetch`,
     `remotes, or call external services.`,
-    `The command filter is a guardrail, not a sandbox: allowed commands run directly on the runner.`,
+    `Shell commands must be plain allow-listed programs: command substitution such as $(...) and`,
+    `access to .git are refused, so run steps separately and use read-only git commands.`,
     ``,
     `Guidelines:`,
     `- Use the \`write_todos\` tool to plan multi-step work and keep the plan updated as you progress.`,
@@ -74,17 +74,15 @@ export function buildReviewSystemPrompt(ctx: GitHubContext): string {
     ``,
     `Review the changed files for correctness bugs, security issues, and clear quality problems.`,
     `Focus on lines that the diff actually adds or changes — only comment on those.`,
-    `Repository guidance under \`.deepagents/\` is read-only context; do not edit memory or skill files.`,
+    `Repository guidance under \`.deepagents/\` is read-only context.`,
     ``,
-    `When finished, write your review as JSON to \`${REVIEW_FINDINGS_PATH}\` using the`,
-    `\`write_file\` tool. This is the only writable path. Use exactly this shape:`,
-    `{ "summary": "<overall summary>", "findings": [ { "path": "<file>", "line": <number>, "body": "<comment>",`,
-    `  "severity": "critical" | "warning" | "info", "suggestion": "<replacement code>" } ] }`,
+    `When finished, submit your review through the structured response tool. Each finding names`,
+    `the file \`path\`, the \`line\` number, and a \`body\` comment.`,
     `\`severity\` is optional — set it when you can rank the finding, omit it otherwise.`,
     `\`suggestion\` is optional — set it only when a concrete fix for exactly the commented line(s)`,
     `is obvious. It is applied verbatim as a GitHub suggested change replacing those lines, so it`,
     `must be complete replacement source code, not prose.`,
-    `Use an empty findings array if the change looks good. Then end with a one-line summary.`,
+    `Use an empty findings array if the change looks good.`,
   ].join("\n");
 }
 

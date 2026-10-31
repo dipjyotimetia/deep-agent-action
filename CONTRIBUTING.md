@@ -4,7 +4,7 @@ Thanks for your interest in improving Deep Agent Action! This guide covers the d
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) **1.3.14** (the version the action pins). Install with `curl -fsSL https://bun.sh/install | bash`.
+- [Bun](https://bun.sh) **1.3.14** (the version CI uses; the shipped action pins its own in [`action.yml`](action.yml)). Install with `curl -fsSL https://bun.sh/install | bash`.
 - A GitHub account. For end-to-end testing, a sandbox repo where you can run the action.
 
 There is **no build/bundle step** — the action runs `src/index.ts` directly via `bun run`. You won't find or commit a `dist/` bundle.
@@ -41,7 +41,12 @@ The **smoke** check (`DEEP_AGENT_SMOKE=1 bun run src/index.ts`) instantiates all
 ```
 action.yml                 # Action metadata: inputs, outputs, composite run steps
 src/
-  index.ts                 # Entry point: route event → authorize → run → land result
+  index.ts                 # Entry point: route event → authorize → hand off to a flow
+  flows/
+    implement.ts           # Edit files, then land them
+    review.ts              # Review a PR and post findings
+    shared.ts              # Streaming, comment mirroring, landing order
+  smoke.ts                 # Constructs every provider model without network calls
   config.ts                # Parse/normalize inputs; default allow/deny lists
   config/repoConfig.ts     # Optional .github/deep-agent.yml loader
   outputs.ts               # Action outputs, job summary, audit artifact
@@ -49,23 +54,24 @@ src/
   agent/
     model.ts               # Multi-provider model factory  ← add providers here
     createAgent.ts         # Assemble the Deep Agent (memory/skills + policy + guardrails + tools)
-    policy.ts              # Deepagents sources, profile, permission, and HITL policy validation
+    policy.ts              # Deepagents sources, profile, and the permission floor
     prompt.ts              # System/user prompts (implement & review)
     stream.ts              # Run the agent, mirror progress to the comment
     shellGuard.ts          # Shared backend command allow/deny enforcement and audit
-    env.ts                 # Secret-free shell environment allow-list
+    shellExec.ts           # Runs approved commands: local process groups or Docker
+    env.ts                 # Shell environment allow-list
     mcp.ts                 # Load MCP servers
     cost.ts                # Token → USD estimate
   github/
     context.ts             # Parse the event payload
     client.ts / auth.ts    # Octokit client + token / GitHub App auth
     comments.ts            # Sticky tracking comment
-    review.ts              # PR review flow
-    ops.ts                 # git operations: branch, commit, push, open PR
+    review.ts              # Review schema, suggestions, and posting
+    ops.ts                 # Hardened git: trust restore, commit, push, open PR
     fork.ts                # Fork-PR gating
     validation/            # trigger / actor / permission checks
   modes/detector.ts        # Route event → agent | review | noop
-test/                      # One *.test.ts per module
+test/                      # One *.test.ts per module, plus agentContract (real deepagents graph)
 examples/                  # Consumer workflows
 docs/                      # Configuration, providers, security, troubleshooting
 scripts/e2e/               # Live E2E harness helpers (result validator)
@@ -75,7 +81,7 @@ scripts/e2e/               # Live E2E harness helpers (result validator)
 
 Two layers:
 
-**Unit tests** (`bun test`) — fast, deterministic, no network. They cover the pure logic module by module: routing, trigger parsing, permission/actor/fork gating, cost estimation, comment rendering, and the E2E harness helpers in `scripts/e2e/`. These run in [CI](.github/workflows/ci.yml) on every push. Run a subset with `bun test test/<file>.test.ts`.
+**Unit tests** (`bun test`) — fast, deterministic, no network. They cover the pure logic module by module: routing, trigger parsing, permission/actor/fork gating, cost estimation, comment rendering, and the E2E harness helpers in `scripts/e2e/`. `test/agentContract.test.ts` drives the real deepagents graph with a scripted model, so upstream behavior changes fail here. These run in [CI](.github/workflows/ci.yml) on every push. Run a subset with `bun test test/<file>.test.ts`. To include the live Docker sandbox tests, set `DEEP_AGENT_DOCKER_TEST_IMAGE=alpine:3.20` with a Docker daemon running.
 
 **Live E2E** ([`.github/workflows/e2e.yml`](.github/workflows/e2e.yml)) — runs the action _as shipped_ against this repository with a real model and the real GitHub API, then cleans up. It's the only layer that exercises the full `src/index.ts` orchestration end to end. Jobs:
 
@@ -120,7 +126,7 @@ How to run: **Actions → E2E Live Events Orchestrator → Run workflow**.
 
 ### Change inputs
 
-Inputs are declared in [`action.yml`](action.yml) and parsed in [`src/config.ts`](src/config.ts) (`loadConfig`). Keep the three in sync: `action.yml`, `loadConfig`, and the docs tables in `README.md` / `docs/configuration.md`. Deepagents policy inputs also have repository-default parsing in [`src/config/repoConfig.ts`](src/config/repoConfig.ts) and security-floor tests.
+Inputs are declared in [`action.yml`](action.yml) and parsed in [`src/config.ts`](src/config.ts) (`loadConfig`). Keep the three in sync: `action.yml`, `loadConfig`, and the docs tables in `README.md` / `docs/configuration.md`. Execution policy is workflow-owned: [`src/config/repoConfig.ts`](src/config/repoConfig.ts) supports only `system_prompt`.
 
 ### Add a test
 

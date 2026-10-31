@@ -33,6 +33,12 @@ jobs:
       - name: Test
         run: bun test
 
+      # The default test run skips these: they need a real Docker daemon.
+      - name: Test Docker shell sandbox
+        run: bun test test/shellExec.test.ts
+        env:
+          DEEP_AGENT_DOCKER_TEST_IMAGE: alpine:3.20
+
       # Smoke: run the action entrypoint from source (as the composite action does)
       # to prove every provider package loads. Fails CI here, not at runtime.
       - name: Smoke-run entrypoint

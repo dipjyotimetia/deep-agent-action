@@ -5,6 +5,7 @@ export const DEFAULT_PROTECTED_PATHS = [
   ".github/deep-agent.yaml",
   ".deep-agent.yml",
   ".deep-agent.yaml",
+  ".github/workflows/**",
 ] as const;
 
 /** Parse workflow-owner extensions to the immutable protected-path floor. */

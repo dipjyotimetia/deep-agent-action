@@ -89,3 +89,30 @@ That's `max_runtime_minutes` or `max_cost_usd` / `max_total_tokens` doing their 
 ## Still stuck?
 
 Open an issue with the run URL, the `status` output, and the relevant log excerpt. The `deep-agent-run` artifact attached to the run contains the full machine-readable record.
+
+## "Command blocked by policy"
+
+The guard refused a shell command, and the reason is in the message and the audit record. Common cases since the guard became stricter:
+
+- **`$(...)`, backticks, or `<(...)`:** command substitution isn't allowed; the agent should run the steps separately.
+- **`git commit`, `push`, `config`, and similar:** these belong to the control plane. The agent should leave its changes uncommitted.
+- **A path under `.git` or `/proc`:** refused. Use `git status`, `git diff`, or `git log` to inspect the repository.
+
+## "Refusing to publish protected paths"
+
+The run changed a protected file: `.deepagents/**`, a deep-agent config path, `.github/workflows/**`, or a `protected_paths` entry. Nothing was published. Make that change yourself in a normal PR.
+
+## "Refusing to land: the agent replaced the .git directory"
+
+The agent's commands replaced or redirected the Git directory, so the action won't run Git against it. Treat the run as suspicious and check what instruction it was given.
+
+## "No review was posted"
+
+The review agent stopped or finished without returning a structured result. The message says why. If it hit a limit, raise `max_cost_usd`, `max_total_tokens`, `max_runtime_minutes`, or `recursion_limit`, then ask again.
+
+## `shell_sandbox` failures
+
+- **"the Docker daemon is unavailable":** the runner needs Docker. GitHub-hosted Linux runners have it; macOS and Windows runners do not.
+- **"Could not pull shell_sandbox_image":** check the image reference and any registry login step earlier in the job.
+- **A command isn't found inside the sandbox:** the tool must be in your image. Host toolchains aren't visible there.
+- **Dependency installs fail:** the default network is `none`. Set `shell_sandbox_network: bridge`, or build dependencies into the image.

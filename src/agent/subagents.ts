@@ -2,7 +2,7 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { DynamicStructuredTool } from "@langchain/core/tools";
 import type { FilesystemPermission, SubAgent } from "deepagents";
 import { z } from "zod";
-import { parseFilesystemPermissionsValue } from "./policy.js";
+import { parseFilesystemPermissionsValue, PERMISSION_FLOOR } from "./policy.js";
 
 const RESERVED_SUBAGENT_NAMES = new Set(["general-purpose"]);
 const SUBAGENT_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -148,13 +148,18 @@ export function parseSubagentsValue(
   return parseConfig(value, name);
 }
 
-/** Insert restrictive custom rules after the immutable guidance floor. */
+/**
+ * Insert restrictive custom rules ahead of the parent's workflow rules, leaving
+ * the immutable floor first. Without restrictions the subagent inherits the
+ * top-level `permissions` passed to `createDeepAgent`.
+ */
 function subagentPermissions(
   parent: FilesystemPermission[],
   restrictions?: FilesystemPermission[],
 ): FilesystemPermission[] | undefined {
   if (!restrictions?.length) return undefined;
-  return [parent[0]!, ...restrictions, ...parent.slice(1)];
+  const floor = PERMISSION_FLOOR.length;
+  return [...parent.slice(0, floor), ...restrictions, ...parent.slice(floor)];
 }
 
 /**

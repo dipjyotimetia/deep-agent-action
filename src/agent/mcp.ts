@@ -45,15 +45,19 @@ export async function loadMcpTools(configJson: string): Promise<McpHandle> {
     return EMPTY;
   }
 
+  let client: MultiServerMCPClient | undefined;
   try {
-    const client = new MultiServerMCPClient(
+    client = new MultiServerMCPClient(
       parsed as ConstructorParameters<typeof MultiServerMCPClient>[0],
     );
     const tools = await client.getTools();
     core.info(`Loaded ${tools.length} MCP tool(s).`);
-    return { tools, close: () => client.close() };
+    const connected = client;
+    return { tools, close: () => connected.close() };
   } catch (err) {
     core.warning(`Failed to load MCP tools: ${err instanceof Error ? err.message : err}.`);
+    // A server may have started before another failed; don't leave it running.
+    await client?.close().catch(() => {});
     return EMPTY;
   }
 }

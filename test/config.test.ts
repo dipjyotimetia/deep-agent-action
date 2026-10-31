@@ -6,6 +6,7 @@ import {
   parseBool,
   parsePositiveNumber,
   parsePositiveInteger,
+  parseShellSandbox,
 } from "../src/config.js";
 import { DEFAULT_TRIAGE_LABELS } from "../src/modes/triage.js";
 
@@ -240,5 +241,39 @@ describe("loadConfig deepagents policy", () => {
     } finally {
       delete process.env.INPUT_SUBAGENTS;
     }
+  });
+});
+
+describe("parseShellSandbox", () => {
+  test("defaults to no sandbox and no network", () => {
+    expect(parseShellSandbox({})).toEqual({
+      shellSandbox: "none",
+      shellSandboxImage: undefined,
+      shellSandboxNetwork: "none",
+    });
+  });
+
+  test("accepts a docker configuration", () => {
+    expect(
+      parseShellSandbox({ mode: "docker", image: "node:22@sha256:abc", network: "bridge" }),
+    ).toEqual({
+      shellSandbox: "docker",
+      shellSandboxImage: "node:22@sha256:abc",
+      shellSandboxNetwork: "bridge",
+    });
+  });
+
+  test("fails loudly rather than silently running unsandboxed", () => {
+    expect(() => parseShellSandbox({ mode: "dockr" })).toThrow("shell_sandbox");
+    expect(() => parseShellSandbox({ mode: "docker" })).toThrow("shell_sandbox_image");
+    expect(() => parseShellSandbox({ mode: "docker", image: "a", network: "host" })).toThrow(
+      "shell_sandbox_network",
+    );
+  });
+
+  test("rejects an image reference that could be read as a docker flag", () => {
+    expect(() => parseShellSandbox({ mode: "docker", image: "--privileged" })).toThrow(
+      "not a valid image",
+    );
   });
 });

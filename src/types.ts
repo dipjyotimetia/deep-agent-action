@@ -102,6 +102,12 @@ export interface Config {
   /** Immutable protected paths plus workflow-owner extensions that can never be published. */
   protectedPaths: string[];
   shellTimeoutSeconds: number;
+  /** Where model-directed shell commands run: directly on the runner, or in Docker. */
+  shellSandbox: "none" | "docker";
+  /** Container image for `shellSandbox: "docker"`; required in that mode. */
+  shellSandboxImage?: string;
+  /** Container network for `shellSandbox: "docker"`. */
+  shellSandboxNetwork: "none" | "bridge";
   /** Minimum interval between tracking-comment edits, ms. */
   commentDebounceMs: number;
   /** Abort the run once estimated spend reaches this many USD (needs a known model price). */

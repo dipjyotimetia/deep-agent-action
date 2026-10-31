@@ -6,6 +6,7 @@ import {
   resolveSubagents,
   type DeepAgentSubagentConfig,
 } from "../src/agent/subagents.js";
+import { buildFilesystemPermissions, PERMISSION_FLOOR } from "../src/agent/policy.js";
 
 const releaseTool = new DynamicStructuredTool({
   name: "publish_release",
@@ -99,17 +100,14 @@ describe("deepagents specialist subagents", () => {
         },
       ],
       [releaseTool],
-      [
-        { operations: ["write"], paths: ["/.deepagents/**"], mode: "deny" },
-        { operations: ["read"], paths: ["/src/**"] },
-      ],
+      buildFilesystemPermissions([{ operations: ["read"], paths: ["/src/**"] }]),
       ["/.deepagents/skills/"],
     );
 
     expect(resolved).toHaveLength(1);
     expect(resolved[0]?.tools?.map((tool) => tool.name)).toEqual(["publish_release"]);
     expect(resolved[0]?.permissions).toEqual([
-      { operations: ["write"], paths: ["/.deepagents/**"], mode: "deny" },
+      ...PERMISSION_FLOOR,
       { operations: ["write"], paths: ["/generated/**"], mode: "deny" },
       { operations: ["read"], paths: ["/src/**"] },
     ]);

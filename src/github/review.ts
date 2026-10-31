@@ -60,10 +60,28 @@ const ReviewResultSchema = z.object({
   findings: z.array(FindingSchema).catch([]),
 });
 
-/** Virtual route and filename used for the review agent's isolated handoff. */
-export const REVIEW_OUTPUT_ROUTE = "/review-output";
-export const REVIEW_FINDINGS_FILE = "findings.json";
-export const REVIEW_FINDINGS_PATH = `${REVIEW_OUTPUT_ROUTE}/${REVIEW_FINDINGS_FILE}`;
+/**
+ * The shape the review agent must return as its structured response. The harness
+ * validates against this and asks the model to retry on a mismatch, so a run
+ * either delivers a real review or visibly delivers none.
+ */
+export const ReviewResponseSchema = z.object({
+  summary: z.string().describe("Overall summary of the review."),
+  findings: z
+    .array(
+      z.object({
+        path: z.string().min(1).describe("Repository-relative path of the changed file."),
+        line: z.number().int().min(1).describe("Line number in the new version of the file."),
+        body: z.string().min(1).describe("The review comment."),
+        severity: z.enum(SEVERITIES).optional(),
+        suggestion: z
+          .string()
+          .optional()
+          .describe("Complete replacement source for the commented line."),
+      }),
+    )
+    .describe("Inline findings; empty when the change looks good."),
+});
 
 /** Fetch the changed files (with patches) for the PR under review. */
 export async function fetchPrFiles(
@@ -80,7 +98,7 @@ export async function fetchPrFiles(
   return files.map((f) => ({ filename: f.filename, patch: f.patch }));
 }
 
-/** Validate/coerce the agent-written findings JSON (pure, testable). */
+/** Validate/coerce the agent's findings, dropping unusable entries (pure, testable). */
 export function parseFindings(raw: unknown): ReviewResult {
   const { summary, findings } = ReviewResultSchema.safeParse(raw ?? {}).data ?? {
     summary: "",

@@ -69,6 +69,20 @@ inputs:
     description: "Max seconds for a single shell command."
     required: false
     default: "600"
+  shell_sandbox:
+    description: >-
+      Where model-directed shell commands run. 'none' runs them directly on the runner behind the command
+      guardrails, which is not isolation. 'docker' runs each one in a throwaway container with no capabilities,
+      no access to the action's secrets, and a read-only .git. Requires a Docker daemon and shell_sandbox_image.
+    required: false
+    default: "none"
+  shell_sandbox_image:
+    description: "Container image providing your toolchain for shell_sandbox: docker. Pin it by digest. Required in that mode."
+    required: false
+  shell_sandbox_network:
+    description: "Container network for shell_sandbox: docker: 'none' (default) or 'bridge', needed if commands install dependencies."
+    required: false
+    default: "none"
   comment_debounce_ms:
     description: "Minimum interval between tracking-comment progress edits."
     required: false
@@ -96,7 +110,7 @@ inputs:
   protected_paths:
     description: >-
       Comma/newline-separated repository-relative globs for additional files the agent may never publish.
-      Repository .deepagents guidance and deep-agent config paths are always protected.
+      Repository .deepagents guidance, deep-agent config paths, and .github/workflows are always protected.
     required: false
   verified_commits:
     description: >-
@@ -180,7 +194,7 @@ inputs:
     required: false
     default: "150"
   max_repeated_tool_calls:
-    description: "Stop when the same tool call repeats without todo progress. Default 8; raise only for intentional repeated operations."
+    description: "Stop when the same tool call repeats with no todo progress or file edit in between. Default 8; raise only for intentional repeated operations."
     required: false
     default: "8"
 
@@ -256,6 +270,9 @@ runs:
         INPUT_AUTO_RUN_ASSIGNEE: ${{ inputs.auto_run_assignee }}
         INPUT_AUTO_RUN_DEFAULT_INSTRUCTION: ${{ inputs.auto_run_default_instruction }}
         INPUT_SHELL_TIMEOUT_SECONDS: ${{ inputs.shell_timeout_seconds }}
+        INPUT_SHELL_SANDBOX: ${{ inputs.shell_sandbox }}
+        INPUT_SHELL_SANDBOX_IMAGE: ${{ inputs.shell_sandbox_image }}
+        INPUT_SHELL_SANDBOX_NETWORK: ${{ inputs.shell_sandbox_network }}
         INPUT_COMMENT_DEBOUNCE_MS: ${{ inputs.comment_debounce_ms }}
         INPUT_PROVIDER_API_KEY: ${{ inputs.provider_api_key }}
         INPUT_APP_ID: ${{ inputs.app_id }}

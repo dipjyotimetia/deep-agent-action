@@ -104,27 +104,35 @@ export function discoverDeepAgentSources(rootDir: string): {
 }
 
 /**
- * Keep repository memory and skills read-only even when custom rules are broad.
- * Deepagents evaluates rules in declaration order, so this security floor must
- * precede user-provided permissions.
+ * Rules no custom permission can override. Deepagents evaluates rules in
+ * declaration order, so these must precede user-provided permissions.
+ *
+ * - Repository memory and skills stay read-only.
+ * - `.git` is out of reach entirely: its config decides which programs the
+ *   control plane's own Git commands run and where its token is sent.
  */
+export const PERMISSION_FLOOR: readonly FilesystemPermission[] = [
+  { operations: ["write"], paths: ["/.deepagents/**"], mode: "deny" },
+  { operations: ["read", "write"], paths: ["/.git", "/.git/**"], mode: "deny" },
+];
+
+/** Apply the immutable floor ahead of workflow-configured rules. */
 export function buildFilesystemPermissions(
   custom?: FilesystemPermission[],
 ): FilesystemPermission[] {
-  return [{ operations: ["write"], paths: ["/.deepagents/**"], mode: "deny" }, ...(custom ?? [])];
+  return [...PERMISSION_FLOOR, ...(custom ?? [])];
 }
 
 /**
- * Review agents may write only their structured handoff. The catch-all deny
- * precedes repository policy because review mode must remain non-mutating even
- * when a repository normally allows broad writes.
+ * Review agents write nothing. The catch-all deny precedes repository policy
+ * because review mode must remain non-mutating even when a repository normally
+ * allows broad writes.
  */
 export function buildReviewFilesystemPermissions(
   custom?: FilesystemPermission[],
 ): FilesystemPermission[] {
   return [
-    { operations: ["write"], paths: ["/.deepagents/**"], mode: "deny" },
-    { operations: ["write"], paths: ["/review-output/**"], mode: "allow" },
+    ...PERMISSION_FLOOR,
     { operations: ["write"], paths: ["/**"], mode: "deny" },
     ...(custom ?? []),
   ];

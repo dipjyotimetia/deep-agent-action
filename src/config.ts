@@ -168,6 +168,30 @@ function loadTriageLabels(): TriageLabels {
   };
 }
 
+/** Parse the shell sandbox inputs, failing loudly on anything that would weaken them. */
+export function parseShellSandbox(raw: {
+  mode?: string;
+  image?: string;
+  network?: string;
+}): Pick<Config, "shellSandbox" | "shellSandboxImage" | "shellSandboxNetwork"> {
+  const mode = raw.mode?.trim() || "none";
+  const network = raw.network?.trim() || "none";
+  const image = raw.image?.trim() || undefined;
+  if (mode !== "none" && mode !== "docker") {
+    throw new Error(`shell_sandbox must be "none" or "docker"; got "${raw.mode}".`);
+  }
+  if (network !== "none" && network !== "bridge") {
+    throw new Error(`shell_sandbox_network must be "none" or "bridge"; got "${raw.network}".`);
+  }
+  if (mode === "docker" && !image) {
+    throw new Error(`shell_sandbox "docker" requires shell_sandbox_image.`);
+  }
+  if (image && !/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image)) {
+    throw new Error(`shell_sandbox_image is not a valid image reference: "${image}".`);
+  }
+  return { shellSandbox: mode, shellSandboxImage: image, shellSandboxNetwork: network };
+}
+
 /** Load and normalize action inputs from the environment. */
 export function loadConfig(): Config {
   const allowedCommands = parseList(core.getInput("allowed_commands"));
@@ -207,6 +231,11 @@ export function loadConfig(): Config {
     ],
     shellTimeoutSeconds:
       parsePositiveInteger(core.getInput("shell_timeout_seconds"), "shell_timeout_seconds") ?? 600,
+    ...parseShellSandbox({
+      mode: core.getInput("shell_sandbox"),
+      image: core.getInput("shell_sandbox_image"),
+      network: core.getInput("shell_sandbox_network"),
+    }),
     commentDebounceMs:
       parsePositiveInteger(core.getInput("comment_debounce_ms"), "comment_debounce_ms") ?? 8000,
     maxCostUsd: parsePositiveNumber(core.getInput("max_cost_usd"), "max_cost_usd"),

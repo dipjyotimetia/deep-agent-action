@@ -12,6 +12,15 @@ export function isForkPr(ctx: GitHubContext): boolean | undefined {
 }
 
 /**
+ * Whether a PR's head must be treated as untrusted fork code: a confirmed fork,
+ * or a PR whose head repository could not be determined. Its branch name means
+ * nothing in this repository, and its repository guidance is not ours.
+ */
+export function isUntrustedPrHead(ctx: GitHubContext): boolean {
+  return ctx.isPR && isForkPr(ctx) !== false;
+}
+
+/**
  * Decide whether a run is permitted given fork status.
  *
  * Default-deny for fork PRs: untrusted fork contexts never reach secrets or a

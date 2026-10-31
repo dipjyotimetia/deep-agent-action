@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isForkPr, forkRunAllowed } from "../src/github/fork.js";
+import { isForkPr, forkRunAllowed, isUntrustedPrHead } from "../src/github/fork.js";
 import { makeContext } from "./mockContext.js";
 
 describe("isForkPr", () => {
@@ -72,5 +72,33 @@ describe("forkRunAllowed", () => {
   test("treats undetermined PR fork status as untrusted", () => {
     const ctx = makeContext({ isPR: true });
     expect(forkRunAllowed(ctx, "agent-approved").allowed).toBe(false);
+  });
+});
+
+describe("isUntrustedPrHead", () => {
+  test("is false for issues and same-repo PRs", () => {
+    expect(isUntrustedPrHead(makeContext({ isPR: false }))).toBe(false);
+    expect(
+      isUntrustedPrHead(
+        makeContext({
+          isPR: true,
+          prHeadRepoFullName: "acme/widgets",
+          prBaseRepoFullName: "acme/widgets",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("is true for a fork, and for a PR whose head repository is unknown", () => {
+    expect(
+      isUntrustedPrHead(
+        makeContext({
+          isPR: true,
+          prHeadRepoFullName: "mallory/widgets",
+          prBaseRepoFullName: "acme/widgets",
+        }),
+      ),
+    ).toBe(true);
+    expect(isUntrustedPrHead(makeContext({ isPR: true }))).toBe(true);
   });
 });
