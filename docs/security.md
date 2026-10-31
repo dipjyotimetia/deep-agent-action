@@ -6,7 +6,7 @@ The agent executes model-generated edits and shell commands inside your runner. 
 
 ## Threat model in one line
 
-A model-driven agent runs with your runner's permissions. The controls below limit **who can invoke it**, **what it can run**, and **what it can see**. By default this is a layered guardrail model, **not a sandbox**. Set `shell_sandbox: docker` for a real boundary around shell commands (see [section 4](#4-command-execution)), and run it with providers and on repositories you trust.
+A model-driven agent runs with your runner's permissions. The controls below limit **who can invoke it**, **what it can run**, and **what it can see**. Without a sandbox image this is a layered guardrail model, **not a sandbox**. Set `shell_sandbox_image` for a real boundary around shell commands and stdio MCP servers (see [section 4](#4-command-execution)), and run it with providers and on repositories you trust.
 
 The `npx create-deep-agent-action` installer follows the same boundary: it writes a reviewed workflow template and optional repository guidance only. It never reads or writes provider credentials, calls GitHub APIs, or changes repository settings.
 
@@ -38,7 +38,7 @@ The agent's shell environment is an **allow-list**, not the runner's full enviro
 - Before the implementation agent runs, persisted `actions/checkout` credentials are removed: headers, helpers, authenticated origin URLs, and the `git-credentials-*.config` files current versions keep in `RUNNER_TEMP`. Steps after this action in the same job can't rely on `actions/checkout`'s stored credentials.
 - `GIT_TERMINAL_PROMPT=0` ensures git never blocks on an interactive credential prompt.
 
-> **This limits the shell's environment; it doesn't hide the secrets.** With `shell_sandbox: none`, commands run as the same user as the action process. On Linux, an allow-listed interpreter can read that process's environment through `/proc`. The guard refuses shell commands that name `/proc`, but it can't see what a `node` or `python` program does. Only `shell_sandbox: docker` puts the secrets out of reach.
+> **This limits the shell's environment; it doesn't hide the secrets.** Without the Docker sandbox, commands run as the same user as the action process. On Linux, an allow-listed interpreter can read that process's original environment through `/proc`, which holds the provider key and GitHub token. The guard refuses shell commands that name `/proc`, but it can't see what a `node` or `python` program does. Only the Docker sandbox puts the secrets out of reach.
 
 ## 4. Command execution
 
@@ -52,19 +52,32 @@ Every shell command the agent runs is screened at the shared backend boundary, i
 
 The workflow owner alone configures the lists. The guard is a guardrail, and it reads command text rather than resolved values, so a path built from a variable isn't caught. Allow-listed interpreters and package runners (`node`, `python`, `npx`, …) and tools with their own execution features (`sed`'s `e` command, for example) can also still run arbitrary code and open network connections.
 
-### What `shell_sandbox: docker` adds
+### Choosing where commands run
 
-| | `none` (default) | `docker` |
+`shell_sandbox` defaults to `auto`:
+
+| Setting | With outside input | Otherwise |
 | --- | --- | --- |
-| Action secrets | Not in the shell's environment, but reachable through `/proc` on Linux | Out of reach: separate PID namespace |
+| `auto`, `shell_sandbox_image` set | Docker | Docker |
+| `auto`, no image | **Refused** | Runs on the runner, with a warning |
+| `docker` | Docker | Docker |
+| `none` | Runs on the runner | Runs on the runner |
+
+**Outside input** means the run would execute fork PR code, or takes its instructions from an issue someone other than the actor wrote, such as a maintainer labeling an outsider's issue. An `@agent` comment doesn't count as outside input, because the comment is the authorized actor's own. Other people's comments on the thread still reach the agent as labeled data, so a public repository should set an image regardless. `none` is the workflow owner accepting the risk.
+
+### What the Docker sandbox adds
+
+| | On the runner | Docker |
+| --- | --- | --- |
+| Action secrets | Not in the shell's environment, but readable through `/proc` on Linux | Out of reach: separate PID namespace |
 | Network | Whatever the runner has | None by default (`shell_sandbox_network`) |
 | `.git` | Writable; restored after the run | Mounted read-only |
 | Files outside the workspace | Anything the runner user can reach | Only the workspace and a scratch home |
 | Lingering processes | Process group killed; `setsid` can escape | Container killed |
 
-Each command gets a fresh container with all capabilities dropped and `no-new-privileges`, running as the runner's user. The Docker socket, runner temp directory, and action secrets aren't mounted. Provide your toolchain through `shell_sandbox_image`, pinned by digest. It fails before any model call when Docker or the image is unavailable, and never falls back to running unsandboxed.
+Each command gets a fresh container with all capabilities dropped and `no-new-privileges`, running as the runner's user. The Docker socket, runner temp directory, and action secrets aren't mounted. Provide your toolchain through `shell_sandbox_image`, pinned by digest. A run fails before any model call when Docker or the image is unavailable, and never falls back to running unsandboxed. Filesystem tools stay on the host under the permission rules below.
 
-Filesystem tools stay on the host under the permission rules below, and **MCP tools run on the host regardless of this setting**.
+**Stdio MCP servers** run in containers too, from the same image, with the same hardening and a read-only workspace. Each sees only its own configured `env`, which travels through the Docker client's environment rather than its command line. `mcp_sandbox_network` defaults to `bridge`, since most servers exist to reach a service. HTTP servers are unchanged, because they already run elsewhere. A server configured with `command: docker` keeps its own flags, which then decide its isolation; the action logs a warning. Without the Docker sandbox, stdio servers run on the runner, with the same `/proc` exposure as the shell.
 
 ### Treating the checkout as tampered
 
@@ -75,7 +88,7 @@ The control plane assumes the agent may have altered the checkout, because Git c
 - Landing first terminates the shell, then restores `.git/config` from a snapshot taken before the agent ran, and refuses to continue if `.git` was replaced or redirected. Any commits the agent made are folded into a single control-plane commit, so the protected-path check sees everything since the agent started. Landing is refused if HEAD no longer descends from the starting commit.
 - Verified commits refuse a symlink leaving the repository, instead of publishing its target's contents.
 
-**Remaining gap with `shell_sandbox: none`:** a process that escapes its process group with `setsid` could rewrite `.git/config` between the restore and the push. Use `docker` where that matters.
+**Remaining gap without the Docker sandbox:** a process that escapes its process group with `setsid` could rewrite `.git/config` between the restore and the push. Use `docker` where that matters.
 
 ## 5. Human-in-the-loop approval gate
 
@@ -118,7 +131,7 @@ Every run is recorded:
 - [ ] Keep `permissions:` minimal in the workflow.
 - [ ] Leave `fork_allow_label` unset unless you actively triage fork PRs.
 - [ ] Trim `allowed_commands` to what your project actually needs.
-- [ ] Set `shell_sandbox: docker` with a digest-pinned `shell_sandbox_image`, especially on repositories that accept outside instructions.
+- [ ] Set a digest-pinned `shell_sandbox_image`, especially on public repositories or any repository that accepts outside instructions.
 - [ ] Keep `require_push_approval: true` unless direct branch updates are explicitly intended.
 - [ ] Add `protected_paths` for release configuration or other repository-specific control-plane files.
 - [ ] Store provider keys as repository/organization **secrets**, never in the workflow file.

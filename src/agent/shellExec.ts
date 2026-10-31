@@ -245,6 +245,59 @@ const DOCKER_CLIENT_ENV = [
   "DOCKER_TLS_VERIFY",
 ];
 
+/** Hardening shared by every container this action starts. */
+const DOCKER_HARDENING_ARGS = [
+  "--init",
+  "--cap-drop",
+  "ALL",
+  "--security-opt",
+  "no-new-privileges",
+  "--pids-limit",
+  "4096",
+];
+
+/** The environment for running the Docker client itself. */
+export function dockerClientEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of DOCKER_CLIENT_ENV) {
+    const value = source[name];
+    if (value) env[name] = value;
+  }
+  return env;
+}
+
+/**
+ * Check Docker and the image before any model call, pulling the image if needed,
+ * so a missing prerequisite fails clearly instead of as a slow first command.
+ */
+export async function prepareDockerImage(image: string): Promise<void> {
+  const docker = (args: string[]) => execFileAsync("docker", args, { env: dockerClientEnv() });
+  try {
+    await docker(["version", "--format", "{{.Server.Version}}"]);
+  } catch (err) {
+    throw new Error(
+      `shell_sandbox is "docker" but the Docker daemon is unavailable: ${errorMessage(err)}`,
+    );
+  }
+  try {
+    await docker(["image", "inspect", image]);
+  } catch {
+    try {
+      await docker(["pull", image]);
+    } catch (err) {
+      throw new Error(`Could not pull shell_sandbox_image "${image}": ${errorMessage(err)}`);
+    }
+  }
+}
+
+/** Stop a named container, ignoring one that has already gone. */
+export async function killContainer(name: string): Promise<void> {
+  await execFileAsync("docker", ["kill", name], {
+    env: dockerClientEnv(),
+    timeout: DOCKER_KILL_TIMEOUT_MS,
+  }).catch(() => {});
+}
+
 export const SANDBOX_WORKSPACE = "/workspace";
 export const SANDBOX_HOME = "/sandbox-home";
 
@@ -286,15 +339,9 @@ export function buildDockerRunArgs(params: {
     "--rm",
     "--name",
     params.name,
-    "--init",
     "--network",
     params.network,
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges",
-    "--pids-limit",
-    "4096",
+    ...DOCKER_HARDENING_ARGS,
     "--workdir",
     SANDBOX_WORKSPACE,
     "--mount",
@@ -316,6 +363,51 @@ export function buildDockerRunArgs(params: {
 }
 
 /**
+ * Pure `docker run` argument builder for a stdio MCP server. Same hardening as a
+ * shell command, with stdin kept open for the protocol. The workspace is read-only:
+ * only the agent's own tools may change what lands. A server's environment is
+ * named here and its values travel through the client's environment, keeping
+ * credentials out of the process list.
+ */
+export function buildDockerMcpArgs(params: {
+  name: string;
+  image: string;
+  network: "none" | "bridge";
+  workspace: string;
+  home: string;
+  uid?: number;
+  gid?: number;
+  envNames: string[];
+  command: string;
+  args: string[];
+}): string[] {
+  const args = [
+    "run",
+    "--rm",
+    "-i",
+    "--name",
+    params.name,
+    "--network",
+    params.network,
+    ...DOCKER_HARDENING_ARGS,
+    "--workdir",
+    SANDBOX_WORKSPACE,
+    "--mount",
+    `type=bind,src=${params.workspace},dst=${SANDBOX_WORKSPACE},readonly`,
+    "--mount",
+    `type=bind,src=${params.home},dst=${SANDBOX_HOME}`,
+    "--env",
+    `HOME=${SANDBOX_HOME}`,
+    "--env",
+    "CI=true",
+  ];
+  if (params.uid != null && params.gid != null) args.push("--user", `${params.uid}:${params.gid}`);
+  for (const name of params.envNames) args.push("--env", name);
+  args.push(params.image, params.command, ...params.args);
+  return args;
+}
+
+/**
  * Runs each command in a throwaway Docker container. Only the workspace and a
  * scratch home are mounted; the Docker socket, runner temp directory, and action
  * secrets are not. Filesystem tools stay on the host, under the deepagents
@@ -333,35 +425,12 @@ export class DockerShellRunner implements ShellRunner {
     private readonly opts: ShellRunnerOptions,
     private readonly sandbox: DockerSandboxOptions,
   ) {
-    const env: Record<string, string> = {};
-    for (const name of DOCKER_CLIENT_ENV) {
-      const value = process.env[name];
-      if (value) env[name] = value;
-    }
-    this.clientEnv = env;
+    this.clientEnv = dockerClientEnv();
     this.home = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "deep-agent-sandbox-home-"));
   }
 
   async prepare(): Promise<void> {
-    const docker = (args: string[]) => execFileAsync("docker", args, { env: this.clientEnv });
-    try {
-      await docker(["version", "--format", "{{.Server.Version}}"]);
-    } catch (err) {
-      throw new Error(
-        `shell_sandbox is "docker" but the Docker daemon is unavailable: ${errorMessage(err)}`,
-      );
-    }
-    try {
-      await docker(["image", "inspect", this.sandbox.image]);
-    } catch {
-      try {
-        await docker(["pull", this.sandbox.image]);
-      } catch (err) {
-        throw new Error(
-          `Could not pull shell_sandbox_image "${this.sandbox.image}": ${errorMessage(err)}`,
-        );
-      }
-    }
+    await prepareDockerImage(this.sandbox.image);
   }
 
   run(command: string): Promise<ExecuteResponse> {
@@ -407,10 +476,7 @@ export class DockerShellRunner implements ShellRunner {
 
   /** Stop a container, then its client: the client waits on a container that's gone. */
   private async kill(name: string, child: ChildProcess): Promise<void> {
-    await execFileAsync("docker", ["kill", name], {
-      env: this.clientEnv,
-      timeout: DOCKER_KILL_TIMEOUT_MS,
-    }).catch(() => {});
+    await killContainer(name);
     child.kill("SIGKILL");
   }
 }

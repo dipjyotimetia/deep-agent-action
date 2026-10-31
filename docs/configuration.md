@@ -61,9 +61,10 @@ All inputs are optional. Source of truth: [`action.yml`](../action.yml).
 | `allowed_commands`      | dev toolchain (below) | Comma/newline-separated allow-list. Setting it **replaces** the default list. |
 | `denied_commands`       | —                     | Extra names to block. Always **merged with** the built-in deny-list.          |
 | `shell_timeout_seconds` | `600`                 | Max seconds per shell command.                                                |
-| `shell_sandbox`         | `none`                | `docker` runs each shell command in a throwaway container with no capabilities, no access to action secrets, and a read-only `.git`. See [security.md](security.md#what-shell_sandbox-docker-adds). |
-| `shell_sandbox_image`   | —                     | Image providing your toolchain, pinned by digest. Required with `docker`.     |
+| `shell_sandbox`         | `auto`                | `auto` uses Docker when an image is set. With no image it refuses runs driven by outside input and warns on the rest. `docker` requires the image; `none` explicitly accepts running on the runner. See [security.md](security.md#choosing-where-commands-run). |
+| `shell_sandbox_image`   | —                     | Image with your toolchain for sandboxed shell commands and stdio MCP servers, pinned by digest. Setting this turns the sandbox on. |
 | `shell_sandbox_network` | `none`                | Container network: `none` or `bridge` (needed if commands install dependencies). |
+| `mcp_sandbox_network`   | `bridge`              | Container network for sandboxed stdio MCP servers: `bridge` or `none`.           |
 
 **Default allow-list** (from [`src/config.ts`](../src/config.ts)):
 
@@ -152,7 +153,7 @@ Set these under `env:` (usually from `secrets`). Provider keys can come from a g
 
 Resolution order for the provider key: `provider_api_key` input → `PROVIDER_API_KEY` → `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY` → `OPENROUTER_API_KEY`. See [providers.md](providers.md) for per-provider detail.
 
-> These are never placed in the agent **shell's** environment. For isolation beyond that, use `shell_sandbox: docker` — see [security.md](security.md#3-shell-environment).
+> These are never placed in the agent **shell's** environment. For isolation beyond that, set `shell_sandbox_image` — see [security.md](security.md#3-shell-environment).
 
 ---
 

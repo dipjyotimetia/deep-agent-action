@@ -7,7 +7,12 @@ import { AIMessage } from "@langchain/core/messages";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { runImplement } from "../src/flows/implement.js";
 import { reviewFromResult } from "../src/flows/review.js";
-import { createShellRunner, streamIntoRecord, type FlowParams } from "../src/flows/shared.js";
+import {
+  assertShellIsolation,
+  createShellRunner,
+  streamIntoRecord,
+  type FlowParams,
+} from "../src/flows/shared.js";
 import { DockerShellRunner, LocalShellRunner } from "../src/agent/shellExec.js";
 import { DEFAULT_ALLOWED_COMMANDS, DEFAULT_DENIED_COMMANDS } from "../src/config.js";
 import type { Config, RunRecord } from "../src/types.js";
@@ -177,6 +182,30 @@ describe("reviewFromResult", () => {
     expect(
       reviewFromResult({ ...base, structuredResponse: { summary: "LGTM", findings: [] } }),
     ).toEqual({ summary: "LGTM", findings: [] });
+  });
+});
+
+describe("assertShellIsolation", () => {
+  const outsideIssue = makeContext({
+    eventName: "issues",
+    actor: "maintainer",
+    payload: { issue: { user: { login: "outsider" } } },
+  });
+  const withSandbox = (shellSandbox: Config["shellSandbox"]) => ({ ...config, shellSandbox });
+
+  test("auto refuses outside input and says how to proceed", () => {
+    expect(() => assertShellIsolation(withSandbox("auto"), outsideIssue)).toThrow(
+      /Refusing.*shell_sandbox_image.*shell_sandbox: none/,
+    );
+  });
+
+  test("auto lets a trusted run through", () => {
+    expect(() => assertShellIsolation(withSandbox("auto"), makeContext())).not.toThrow();
+  });
+
+  test("an explicit choice or a sandbox is always allowed", () => {
+    expect(() => assertShellIsolation(withSandbox("none"), outsideIssue)).not.toThrow();
+    expect(() => assertShellIsolation(withSandbox("docker"), outsideIssue)).not.toThrow();
   });
 });
 

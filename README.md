@@ -223,9 +223,10 @@ All inputs are optional.
 | `auto_run_assignee`            | GitHub username that, when assigned to an issue, runs the agent without a trigger-phrase match.                                                                                                                             | —                       |
 | `auto_run_default_instruction` | Fallback instruction for an auto-run event when the issue has no usable title/body text.                                                                                                                                    | —                       |
 | `shell_timeout_seconds`        | Max seconds for a single shell command.                                                                                                                                                                                     | `600`                   |
-| `shell_sandbox`                | Where shell commands run: `none` (on the runner) or `docker` (throwaway container, no access to action secrets).                                                                                                            | `none`                  |
-| `shell_sandbox_image`          | Container image providing your toolchain, pinned by digest. Required with `docker`.                                                                                                                                         | —                       |
+| `shell_sandbox`                | Where shell commands run. `auto` uses Docker when an image is set; with no image it refuses runs driven by outside input. Also `docker` or `none`.                                                                          | `auto`                  |
+| `shell_sandbox_image`          | Container image with your toolchain, pinned by digest. Setting this turns the sandbox on for shell commands and stdio MCP servers.                                                                                          | —                       |
 | `shell_sandbox_network`        | Container network: `none` or `bridge`.                                                                                                                                                                                      | `none`                  |
+| `mcp_sandbox_network`          | Container network for sandboxed stdio MCP servers: `bridge` or `none`.                                                                                                                                                      | `bridge`                |
 | `comment_debounce_ms`          | Minimum interval between tracking-comment progress edits.                                                                                                                                                                   | `8000`                  |
 | `provider_api_key`             | Model provider API key. Also read from `PROVIDER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `OPENROUTER_API_KEY`.                                                                               | —                       |
 | `app_id`                       | GitHub App id used to mint a scoped installation token. Also read from `APP_ID`.                                                                                                                                            | —                       |
@@ -296,13 +297,13 @@ The agent runs untrusted, model-generated commands, so the action is defensive b
 
 - **Permission gating** — only human collaborators with `write`/`admin` (configurable) can trigger it; bot accounts are ignored to prevent loops.
 - **Fork-PR protection** — fork PRs are denied unless a maintainer applies the `fork_allow_label`.
-- **Curated shell environment** — provider keys and `GITHUB_TOKEN` are never placed in the shell's environment. Set `shell_sandbox: docker` to put them out of reach entirely.
+- **Shell isolation** — provider keys and `GITHUB_TOKEN` are never placed in the shell's environment. Set `shell_sandbox_image` to put them out of reach entirely, by running shell commands and stdio MCP servers in containers. Without an image, runs driven by outside input are refused.
 - **Command guardrails** — an allow-list plus an always-on deny-list (network/privilege tools are blocked even if allow-listed), enforced at the shared backend for the main agent and delegated subagents.
 - **Human-approval gate** — landing is approval-gated by default; set `require_push_approval: false` only for deliberate direct updates.
 - **Tamper-resistant landing** — before committing, the control plane stops everything the agent started, restores Git configuration, and folds any agent commits into one reviewed change.
 - **Repository guidance boundary** — only `.deepagents/AGENTS.md` and `.deepagents/skills/` are loaded by deepagents; their built-in filesystem writes are denied, protected paths cannot be published, and issue/PR text remains separate untrusted data.
 
-By default this is a guardrail model, not a sandbox: allowed commands execute directly on the runner. Use `shell_sandbox: docker` for real isolation, and run it on the providers and repos you trust. See [docs/security.md](docs/security.md) for the full threat model, and [SECURITY.md](SECURITY.md) to report a vulnerability.
+Without a sandbox image this is a guardrail model, not a sandbox: allowed commands execute directly on the runner. Set `shell_sandbox_image` for real isolation, and run it on the providers and repos you trust. See [docs/security.md](docs/security.md) for the full threat model, and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Examples
 
@@ -338,6 +339,7 @@ A few common cases — full guide in [docs/troubleshooting.md](docs/troubleshoot
 - Review any automation that expected direct landing: `require_push_approval` now defaults to `true`.
 - The agent can no longer change `.github/workflows/**` through this action, run `git commit`/`push`/`config`, or use `$(...)` in shell commands. Its commits are folded into one control-plane commit.
 - Fork PRs approved with `fork_allow_label` always land as a proposed branch, and ignore the fork's `.deepagents` guidance.
+- Runs driven by outside input (fork PR code, or an issue someone other than the actor wrote, such as an `auto_run_label` on an outsider's issue) are refused unless you set `shell_sandbox_image`, or `shell_sandbox: none` to accept the risk.
 - A review run that doesn't return a result now fails instead of posting an empty review.
 - `actions/checkout` credentials are removed for the rest of the job, so later steps that need them must authenticate themselves.
 

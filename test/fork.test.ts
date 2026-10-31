@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { isForkPr, forkRunAllowed, isUntrustedPrHead } from "../src/github/fork.js";
+import {
+  isForkPr,
+  forkRunAllowed,
+  isUntrustedPrHead,
+  untrustedInputReason,
+} from "../src/github/fork.js";
 import { makeContext } from "./mockContext.js";
 
 describe("isForkPr", () => {
@@ -100,5 +105,45 @@ describe("isUntrustedPrHead", () => {
       ),
     ).toBe(true);
     expect(isUntrustedPrHead(makeContext({ isPR: true }))).toBe(true);
+  });
+});
+
+describe("untrustedInputReason", () => {
+  const issue = (actor: string, author: string | undefined) =>
+    makeContext({
+      eventName: "issues",
+      actor,
+      payload: { issue: author ? { user: { login: author } } : {} },
+    });
+
+  test("trusts a run on the actor's own issue, a comment, or a same-repo PR", () => {
+    expect(untrustedInputReason(issue("alice", "alice"))).toBeUndefined();
+    expect(untrustedInputReason(makeContext({ eventName: "issue_comment" }))).toBeUndefined();
+    expect(
+      untrustedInputReason(
+        makeContext({
+          isPR: true,
+          prHeadRepoFullName: "acme/widgets",
+          prBaseRepoFullName: "acme/widgets",
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("flags an issue a maintainer labeled but someone else wrote", () => {
+    expect(untrustedInputReason(issue("maintainer", "outsider"))).toContain("someone else");
+    expect(untrustedInputReason(issue("maintainer", undefined))).toContain("someone else");
+  });
+
+  test("flags fork code", () => {
+    expect(
+      untrustedInputReason(
+        makeContext({
+          isPR: true,
+          prHeadRepoFullName: "mallory/widgets",
+          prBaseRepoFullName: "acme/widgets",
+        }),
+      ),
+    ).toContain("fork");
   });
 });

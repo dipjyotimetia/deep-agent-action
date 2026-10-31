@@ -26,9 +26,11 @@ import {
 import { fetchThread, type ThreadInfo } from "./github/thread.js";
 import { parseMemory, type MemoryTurn } from "./github/memory.js";
 import { createModel } from "./agent/model.js";
-import { loadMcpTools } from "./agent/mcp.js";
+import { loadMcpTools, type McpHandle } from "./agent/mcp.js";
+import { prepareDockerImage } from "./agent/shellExec.js";
 import { buildRunBranchSuffix } from "./github/ops.js";
 import { runImplement } from "./flows/implement.js";
+import { assertShellIsolation } from "./flows/shared.js";
 import { runReview } from "./flows/review.js";
 import { smokeCheck } from "./smoke.js";
 import { buildFailureRecord, emitOutputs } from "./outputs.js";
@@ -218,10 +220,7 @@ async function run(): Promise<void> {
   const url = runUrl(ctx);
   const branchSuffix = buildRunBranchSuffix();
 
-  // M2: only implement mode can use MCP tools, so review never starts a server.
-  // Loaded before the `try` whose `finally` closes it, so nothing below can leave
-  // a server process keeping the action alive.
-  const mcp = await loadMcpTools(mode === "agent" ? config.mcpConfig : "");
+  let mcp: McpHandle | undefined;
   const artifactDir = mkdtempSync(
     join(process.env.RUNNER_TEMP || tmpdir(), "deep-agent-artifacts-"),
   );
@@ -250,6 +249,21 @@ async function run(): Promise<void> {
       renderBody({ status: "working", instruction, runUrl: url }),
     );
 
+    // M2: only implement mode has a shell or MCP tools. Started inside the `try` so
+    // the `finally` closes them, and nothing can leave a server keeping the action
+    // alive. The isolation check comes first: stdio servers start on the same host.
+    if (mode === "agent") {
+      assertShellIsolation(config, ctx);
+      const docker = config.shellSandbox === "docker" ? config.shellSandboxImage : undefined;
+      if (docker) await prepareDockerImage(docker);
+      mcp = await loadMcpTools(
+        config.mcpConfig,
+        docker
+          ? { image: docker, network: config.mcpSandboxNetwork, workspace: rootDir }
+          : undefined,
+      );
+    }
+
     const apiKey = resolveProviderApiKey();
     const modelFor = (modelSpec: string) => {
       const { provider, name } = normalizeModel(modelSpec);
@@ -271,7 +285,7 @@ async function run(): Promise<void> {
       commentId,
       url,
       branchSuffix,
-      mcpTools: mcp.tools,
+      mcpTools: mcp?.tools ?? [],
       renderBody,
       priorMemory,
       threadContext: thread.context,
@@ -323,7 +337,7 @@ async function run(): Promise<void> {
     await emitOutputs(record);
     core.setFailed(`Deep Agent run failed: ${message}`);
   } finally {
-    await mcp.close().catch(() => {});
+    await mcp?.close().catch(() => {});
     rmSync(artifactDir, { recursive: true, force: true });
   }
 }

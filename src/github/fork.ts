@@ -21,6 +21,20 @@ export function isUntrustedPrHead(ctx: GitHubContext): boolean {
 }
 
 /**
+ * Why a run's code or instructions come from someone other than the authorized
+ * actor, or undefined when they don't. A maintainer's label or assignment can start
+ * a run on an issue, but the issue's text is still its author's.
+ */
+export function untrustedInputReason(ctx: GitHubContext): string | undefined {
+  if (isUntrustedPrHead(ctx)) return "it would run code from a fork";
+  if (ctx.eventName === "issues") {
+    const author = (ctx.payload as { issue?: { user?: { login?: string } } })?.issue?.user?.login;
+    if (author !== ctx.actor) return "its instructions come from an issue someone else wrote";
+  }
+  return undefined;
+}
+
+/**
  * Decide whether a run is permitted given fork status.
  *
  * Default-deny for fork PRs: untrusted fork contexts never reach secrets or a

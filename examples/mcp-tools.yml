@@ -41,6 +41,10 @@ jobs:
           protected_paths: ".github/workflows/**,.github/CODEOWNERS"
           max_runtime_minutes: "10"
           max_total_tokens: "250000"
+          # Runs stdio MCP servers and shell commands in containers. The image must
+          # provide the server's command (uvx here) and whatever the agent's shell
+          # commands need, such as git or your test runner. Pin it by digest.
+          shell_sandbox_image: "ghcr.io/astral-sh/uv:python3.13-bookworm-slim"
           # A single local server (HTTP fetch). Use valid JSON on one line, or a
           # YAML block scalar as below for readability. Keep the server's own
           # credentials and capabilities least-privileged.

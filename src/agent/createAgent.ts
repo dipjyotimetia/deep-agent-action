@@ -188,10 +188,10 @@ export function buildAgent(opts: BuildAgentOptions) {
       systemPrompt: opts.systemPrompt,
       permissions,
       responseFormat: toolStrategy(ReviewResponseSchema),
-      // No todo middleware here: combined with `toolStrategy` under createDeepAgent,
-      // its hook breaks the retry after an invalid response (InvalidUpdateError on
-      // `jumpTo`, deepagents 1.16.2 / langchain 1.6.0). A review needs no plan, and
-      // the contract tests cover this retry.
+      // No todo middleware here. With it, the stack has two `afterModel` hooks, and
+      // langchain's `toolStrategy` retry after an invalid response then throws
+      // InvalidUpdateError on `jumpTo` (langchain 1.6.0; related to langchainjs#10175).
+      // A review needs no plan, and the contract tests cover this retry.
       middleware: [
         // Replaces the default filesystem middleware by name, for the general-
         // purpose subagent too, removing every mutating tool.

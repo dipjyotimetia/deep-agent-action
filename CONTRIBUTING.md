@@ -4,7 +4,7 @@ Thanks for your interest in improving Deep Agent Action! This guide covers the d
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) **1.3.14** (the version CI uses; the shipped action pins its own in [`action.yml`](action.yml)). Install with `curl -fsSL https://bun.sh/install | bash`.
+- [Bun](https://bun.sh) **1.4.0** (the version [`action.yml`](action.yml) pins; CI and E2E use the same one). Install with `curl -fsSL https://bun.sh/install | bash`.
 - A GitHub account. For end-to-end testing, a sandbox repo where you can run the action.
 
 There is **no build/bundle step** — the action runs `src/index.ts` directly via `bun run`. You won't find or commit a `dist/` bundle.
@@ -81,7 +81,7 @@ scripts/e2e/               # Live E2E harness helpers (result validator)
 
 Two layers:
 
-**Unit tests** (`bun test`) — fast, deterministic, no network. They cover the pure logic module by module: routing, trigger parsing, permission/actor/fork gating, cost estimation, comment rendering, and the E2E harness helpers in `scripts/e2e/`. `test/agentContract.test.ts` drives the real deepagents graph with a scripted model, so upstream behavior changes fail here. These run in [CI](.github/workflows/ci.yml) on every push. Run a subset with `bun test test/<file>.test.ts`. To include the live Docker sandbox tests, set `DEEP_AGENT_DOCKER_TEST_IMAGE=alpine:3.20` with a Docker daemon running.
+**Unit tests** (`bun test`) — fast, deterministic, no network. They cover the pure logic module by module: routing, trigger parsing, permission/actor/fork gating, cost estimation, comment rendering, and the E2E harness helpers in `scripts/e2e/`. `test/agentContract.test.ts` drives the real deepagents graph with a scripted model, so upstream behavior changes fail here. These run in [CI](.github/workflows/ci.yml) on every push. Run a subset with `bun test test/<file>.test.ts`. To include the live Docker sandbox tests, set `DEEP_AGENT_DOCKER_TEST_IMAGE=alpine:3.20` and `DEEP_AGENT_DOCKER_TEST_NODE_IMAGE=node:22-alpine` with a Docker daemon running.
 
 **Live E2E** ([`.github/workflows/e2e.yml`](.github/workflows/e2e.yml)) — runs the action _as shipped_ against this repository with a real model and the real GitHub API, then cleans up. It's the only layer that exercises the full `src/index.ts` orchestration end to end. Jobs:
 

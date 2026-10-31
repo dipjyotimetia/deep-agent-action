@@ -25,7 +25,7 @@ inputs:
     description: "Endpoint URL for the 'openai-compatible' provider (Groq, xAI, DeepSeek, Together, Ollama, vLLM, …)."
     required: false
   mcp_config:
-    description: 'MCP servers JSON: { "mcpServers": { name: { command, args, env } | { url } } }. Tools are exposed to the agent.'
+    description: 'MCP servers JSON: { "mcpServers": { name: { command, args, env } | { url } } }. Tools are exposed to the agent. With the Docker sandbox on, stdio servers run in containers too.'
     required: false
   harness_profile:
     description: >-
@@ -71,18 +71,23 @@ inputs:
     default: "600"
   shell_sandbox:
     description: >-
-      Where model-directed shell commands run. 'none' runs them directly on the runner behind the command
-      guardrails, which is not isolation. 'docker' runs each one in a throwaway container with no capabilities,
-      no access to the action's secrets, and a read-only .git. Requires a Docker daemon and shell_sandbox_image.
+      Where model-directed shell commands run. 'auto' uses Docker when shell_sandbox_image is set. Without an image
+      it refuses runs driven by outside input (fork PR code, or an issue someone other than the actor wrote) and warns
+      on the rest. 'docker' requires the image. 'none' explicitly accepts running on the runner, where commands can
+      read this action's secrets through /proc on Linux. Docker needs a Linux runner with a daemon.
     required: false
-    default: "none"
+    default: "auto"
   shell_sandbox_image:
-    description: "Container image providing your toolchain for shell_sandbox: docker. Pin it by digest. Required in that mode."
+    description: "Container image providing your toolchain for sandboxed shell commands and stdio MCP servers. Pin it by digest. Setting this turns the sandbox on."
     required: false
   shell_sandbox_network:
-    description: "Container network for shell_sandbox: docker: 'none' (default) or 'bridge', needed if commands install dependencies."
+    description: "Container network for sandboxed shell commands: 'none' (default) or 'bridge', needed if commands install dependencies."
     required: false
     default: "none"
+  mcp_sandbox_network:
+    description: "Container network for sandboxed stdio MCP servers: 'bridge' (default) or 'none'."
+    required: false
+    default: "bridge"
   comment_debounce_ms:
     description: "Minimum interval between tracking-comment progress edits."
     required: false
@@ -273,6 +278,7 @@ runs:
         INPUT_SHELL_SANDBOX: ${{ inputs.shell_sandbox }}
         INPUT_SHELL_SANDBOX_IMAGE: ${{ inputs.shell_sandbox_image }}
         INPUT_SHELL_SANDBOX_NETWORK: ${{ inputs.shell_sandbox_network }}
+        INPUT_MCP_SANDBOX_NETWORK: ${{ inputs.mcp_sandbox_network }}
         INPUT_COMMENT_DEBOUNCE_MS: ${{ inputs.comment_debounce_ms }}
         INPUT_PROVIDER_API_KEY: ${{ inputs.provider_api_key }}
         INPUT_APP_ID: ${{ inputs.app_id }}

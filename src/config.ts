@@ -173,15 +173,24 @@ export function parseShellSandbox(raw: {
   mode?: string;
   image?: string;
   network?: string;
-}): Pick<Config, "shellSandbox" | "shellSandboxImage" | "shellSandboxNetwork"> {
-  const mode = raw.mode?.trim() || "none";
+  mcpNetwork?: string;
+}): Pick<
+  Config,
+  "shellSandbox" | "shellSandboxImage" | "shellSandboxNetwork" | "mcpSandboxNetwork"
+> {
+  const mode = raw.mode?.trim() || "auto";
   const network = raw.network?.trim() || "none";
+  // MCP servers usually exist to reach an outside service.
+  const mcpNetwork = raw.mcpNetwork?.trim() || "bridge";
   const image = raw.image?.trim() || undefined;
-  if (mode !== "none" && mode !== "docker") {
-    throw new Error(`shell_sandbox must be "none" or "docker"; got "${raw.mode}".`);
+  if (mode !== "auto" && mode !== "none" && mode !== "docker") {
+    throw new Error(`shell_sandbox must be "auto", "none", or "docker"; got "${raw.mode}".`);
   }
   if (network !== "none" && network !== "bridge") {
     throw new Error(`shell_sandbox_network must be "none" or "bridge"; got "${raw.network}".`);
+  }
+  if (mcpNetwork !== "none" && mcpNetwork !== "bridge") {
+    throw new Error(`mcp_sandbox_network must be "none" or "bridge"; got "${raw.mcpNetwork}".`);
   }
   if (mode === "docker" && !image) {
     throw new Error(`shell_sandbox "docker" requires shell_sandbox_image.`);
@@ -189,7 +198,12 @@ export function parseShellSandbox(raw: {
   if (image && !/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image)) {
     throw new Error(`shell_sandbox_image is not a valid image reference: "${image}".`);
   }
-  return { shellSandbox: mode, shellSandboxImage: image, shellSandboxNetwork: network };
+  return {
+    shellSandbox: mode === "auto" && image ? "docker" : mode,
+    shellSandboxImage: image,
+    shellSandboxNetwork: network,
+    mcpSandboxNetwork: mcpNetwork,
+  };
 }
 
 /** Load and normalize action inputs from the environment. */
@@ -235,6 +249,7 @@ export function loadConfig(): Config {
       mode: core.getInput("shell_sandbox"),
       image: core.getInput("shell_sandbox_image"),
       network: core.getInput("shell_sandbox_network"),
+      mcpNetwork: core.getInput("mcp_sandbox_network"),
     }),
     commentDebounceMs:
       parsePositiveInteger(core.getInput("comment_debounce_ms"), "comment_debounce_ms") ?? 8000,

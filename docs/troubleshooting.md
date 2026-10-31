@@ -110,9 +110,14 @@ The agent's commands replaced or redirected the Git directory, so the action won
 
 The review agent stopped or finished without returning a structured result. The message says why. If it hit a limit, raise `max_cost_usd`, `max_total_tokens`, `max_runtime_minutes`, or `recursion_limit`, then ask again.
 
+## "Refusing to run without a shell sandbox"
+
+The run would execute fork PR code, or take its instructions from an issue someone other than the actor wrote, and no sandbox image is set. Set `shell_sandbox_image`, or `shell_sandbox: none` if you accept that commands could read this action's secrets.
+
 ## `shell_sandbox` failures
 
 - **"the Docker daemon is unavailable":** the runner needs Docker. GitHub-hosted Linux runners have it; macOS and Windows runners do not.
 - **"Could not pull shell_sandbox_image":** check the image reference and any registry login step earlier in the job.
 - **A command isn't found inside the sandbox:** the tool must be in your image. Host toolchains aren't visible there.
 - **Dependency installs fail:** the default network is `none`. Set `shell_sandbox_network: bridge`, or build dependencies into the image.
+- **An MCP server fails to start:** its command (`npx`, `uvx`, …) must be in the image, or give that server its own `command: docker` configuration.

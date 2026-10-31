@@ -17,7 +17,7 @@ import {
 import type { RepoConfig } from "../config/repoConfig.js";
 import type { Octokit } from "../github/client.js";
 import { updateTrackingComment, type TrackingState } from "../github/comments.js";
-import { isUntrustedPrHead } from "../github/fork.js";
+import { isUntrustedPrHead, untrustedInputReason } from "../github/fork.js";
 import { landChangesVerified } from "../github/graphqlCommit.js";
 import type { MemoryTurn } from "../github/memory.js";
 import {
@@ -85,6 +85,27 @@ export function assertVerifiedCommitsAuth(
         "refusing to fall back to unsigned commits.",
     );
   }
+}
+
+/**
+ * Decide whether this implement run may use its shell where it would run. Without
+ * a sandbox, commands can read the action's secrets through `/proc` on Linux, so
+ * a run driven by outside input needs a sandbox, or the workflow explicitly
+ * accepting that risk with `shell_sandbox: none`.
+ */
+export function assertShellIsolation(config: Config, ctx: GitHubContext): void {
+  if (config.shellSandbox !== "auto") return;
+  const reason = untrustedInputReason(ctx);
+  if (reason) {
+    throw new Error(
+      `Refusing to run without a shell sandbox because ${reason}. Set shell_sandbox_image to ` +
+        `run commands in a container, or shell_sandbox: none to accept the risk.`,
+    );
+  }
+  core.warning(
+    "The agent's shell is not isolated from this action's secrets. Set shell_sandbox_image to " +
+      "isolate it, or shell_sandbox: none to silence this warning.",
+  );
 }
 
 /** Build the runner for model-directed shell commands, per the workflow's sandbox setting. */

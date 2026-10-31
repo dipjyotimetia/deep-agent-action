@@ -245,29 +245,48 @@ describe("loadConfig deepagents policy", () => {
 });
 
 describe("parseShellSandbox", () => {
-  test("defaults to no sandbox and no network", () => {
+  test("defaults to auto, with no shell network and MCP network available", () => {
     expect(parseShellSandbox({})).toEqual({
-      shellSandbox: "none",
+      shellSandbox: "auto",
       shellSandboxImage: undefined,
       shellSandboxNetwork: "none",
+      mcpSandboxNetwork: "bridge",
     });
   });
 
-  test("accepts a docker configuration", () => {
+  test("setting an image is enough to turn the sandbox on", () => {
+    expect(parseShellSandbox({ image: "node:22@sha256:abc" }).shellSandbox).toBe("docker");
+    expect(parseShellSandbox({ mode: "auto", image: "node:22" }).shellSandbox).toBe("docker");
+  });
+
+  test("an explicit none wins over an image", () => {
+    expect(parseShellSandbox({ mode: "none", image: "node:22" }).shellSandbox).toBe("none");
+  });
+
+  test("accepts a full docker configuration", () => {
     expect(
-      parseShellSandbox({ mode: "docker", image: "node:22@sha256:abc", network: "bridge" }),
+      parseShellSandbox({
+        mode: "docker",
+        image: "node:22@sha256:abc",
+        network: "bridge",
+        mcpNetwork: "none",
+      }),
     ).toEqual({
       shellSandbox: "docker",
       shellSandboxImage: "node:22@sha256:abc",
       shellSandboxNetwork: "bridge",
+      mcpSandboxNetwork: "none",
     });
   });
 
   test("fails loudly rather than silently running unsandboxed", () => {
     expect(() => parseShellSandbox({ mode: "dockr" })).toThrow("shell_sandbox");
     expect(() => parseShellSandbox({ mode: "docker" })).toThrow("shell_sandbox_image");
-    expect(() => parseShellSandbox({ mode: "docker", image: "a", network: "host" })).toThrow(
+    expect(() => parseShellSandbox({ image: "a", network: "host" })).toThrow(
       "shell_sandbox_network",
+    );
+    expect(() => parseShellSandbox({ image: "a", mcpNetwork: "host" })).toThrow(
+      "mcp_sandbox_network",
     );
   });
 
