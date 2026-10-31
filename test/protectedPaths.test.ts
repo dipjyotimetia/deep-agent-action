@@ -15,6 +15,7 @@ describe("protected landing paths", () => {
       ".github/deep-agent.yaml",
       ".deep-agent.yml",
       ".deep-agent.yaml",
+      ".github/workflows/**",
     ]);
   });
 
@@ -27,7 +28,7 @@ describe("protected landing paths", () => {
           ".github/workflows/release.yml",
           ".github/deep-agent.yml",
         ],
-        [...DEFAULT_PROTECTED_PATHS, ".github/workflows/**"],
+        [...DEFAULT_PROTECTED_PATHS, "docs/internal/**"],
       ),
     ).toEqual([".deepagents/AGENTS.md", ".github/workflows/release.yml", ".github/deep-agent.yml"]);
   });

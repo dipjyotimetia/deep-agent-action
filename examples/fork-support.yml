@@ -37,6 +37,11 @@ jobs:
           model: "claude-sonnet-5"
           trigger_phrase: "@agent"
           fork_allow_label: "agent-approved"
+          # Fork code never runs on the runner itself: this is required for fork PRs.
+          # Use an image with your toolchain, pinned by digest.
+          shell_sandbox_image: "node:22-bookworm"
+          # Uncomment if the agent must install dependencies:
+          # shell_sandbox_network: "bridge"
         env:
           PROVIDER_API_KEY: ${{ secrets.PROVIDER_API_KEY }}
 

@@ -168,9 +168,8 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
     expect(readFileSync(join(rootDir, "demo", "E2E_HELLO.md"), "utf8")).toBe("Hello from E2E.\n");
   });
 
-  test("review mode writes only to isolated output and exposes no edit or execute capability", async () => {
+  test("review mode exposes no write, edit, or execute capability", async () => {
     const reviewRoot = mkdtempSync(join(tmpdir(), "da-review-root-"));
-    const reviewOutputDir = mkdtempSync(join(tmpdir(), "da-review-output-"));
     mkdirSync(join(reviewRoot, "src"), { recursive: true });
     writeFileSync(join(reviewRoot, "src", "a.ts"), "original\n");
     const toolCallRecord: ToolCallRecord[] = [];
@@ -178,16 +177,6 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
     const agent = buildAgent({
       model: new FakeToolCallingModel({
         toolCalls: [
-          [
-            {
-              name: "write_file",
-              args: {
-                file_path: "/review-output/findings.json",
-                content: '{"summary":"done","findings":[]}',
-              },
-              id: "write-findings",
-            },
-          ],
           [
             {
               name: "write_file",
@@ -218,8 +207,7 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
       }),
       rootDir: reviewRoot,
       mode: "review",
-      reviewOutputDir,
-      systemPrompt: "Write the review output without changing the repository.",
+      systemPrompt: "Review without changing the repository.",
       allowedCommands: ["touch"],
       deniedCommands: [],
       filesystemPermissions: [{ operations: ["write"], paths: ["/**"], mode: "allow" }],
@@ -227,11 +215,12 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
       toolCallRecord,
     });
 
-    await agent.invoke({ messages: [{ role: "user", content: "Review this change." }] });
+    // A model that never submits a review ends with an error from the harness;
+    // what matters here is that none of its attempts touched the repository.
+    await agent
+      .invoke({ messages: [{ role: "user", content: "Review this change." }] })
+      .catch(() => {});
 
-    expect(readFileSync(join(reviewOutputDir, "findings.json"), "utf8")).toBe(
-      '{"summary":"done","findings":[]}',
-    );
     expect(readFileSync(join(reviewRoot, "src", "a.ts"), "utf8")).toBe("original\n");
     expect(existsSync(join(reviewRoot, "review-bypass-marker"))).toBe(false);
     expect(toolCallRecord).toEqual([]);
@@ -239,7 +228,6 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
 
   test("delegated review subagents cannot regain shell execution", async () => {
     const reviewRoot = mkdtempSync(join(tmpdir(), "da-review-subagent-"));
-    const reviewOutputDir = mkdtempSync(join(tmpdir(), "da-review-output-"));
     const toolCallRecord: ToolCallRecord[] = [];
     const agent = buildAgent({
       model: new FakeToolCallingModel({
@@ -267,7 +255,6 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
       }),
       rootDir: reviewRoot,
       mode: "review",
-      reviewOutputDir,
       systemPrompt: "Review without changing the repository.",
       allowedCommands: ["touch"],
       deniedCommands: [],
@@ -275,7 +262,9 @@ describe("buildAgent filesystem sandbox (virtualMode)", () => {
       toolCallRecord,
     });
 
-    await agent.invoke({ messages: [{ role: "user", content: "Delegate this review." }] });
+    await agent
+      .invoke({ messages: [{ role: "user", content: "Delegate this review." }] })
+      .catch(() => {});
 
     expect(existsSync(join(reviewRoot, "delegated-review-bypass"))).toBe(false);
     expect(toolCallRecord).toEqual([]);

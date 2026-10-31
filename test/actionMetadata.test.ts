@@ -75,6 +75,21 @@ describe("composite action metadata", () => {
     expect(run?.env?.INPUT_APPLY_SUGGESTIONS).toBeUndefined();
   });
 
+  test("sandboxes automatically once an image is set, and forwards every sandbox input", () => {
+    const run = steps.find((step) => step.name === "Run Deep Agent");
+
+    expect(metadata.inputs.shell_sandbox.default).toBe("auto");
+    for (const name of [
+      "shell_sandbox",
+      "shell_sandbox_image",
+      "shell_sandbox_network",
+      "mcp_sandbox_network",
+    ]) {
+      expect(metadata.inputs[name]).toBeDefined();
+      expect(run?.env?.[`INPUT_${name.toUpperCase()}`]).toBe(`\${{ inputs.${name} }}`);
+    }
+  });
+
   test("exposes and forwards specialist subagent configuration", () => {
     const run = steps.find((step) => step.name === "Run Deep Agent");
 
@@ -96,10 +111,26 @@ describe("repository CI metadata", () => {
   const ci = workflow(".github/workflows/ci.yml");
   const steps = ci.jobs.build.steps as Step[];
 
-  test("uses the same Bun version as the shipped action and audits dependencies", () => {
-    const setup = steps.find((step) => step.uses === "oven-sh/setup-bun@v2");
-    expect(setup?.with?.["bun-version"]).toBe("1.3.14");
+  test("audits dependencies", () => {
     expect(steps.some((step) => step.run === "bun audit")).toBe(true);
+  });
+
+  test("every workflow tests on the Bun version the action ships", () => {
+    const shipped = (workflow("action.yml").runs.steps as Step[]).find(
+      (step) => step.uses === "oven-sh/setup-bun@v2",
+    )?.with?.["bun-version"];
+    expect(shipped).toBeDefined();
+
+    for (const file of [
+      ".github/workflows/ci.yml",
+      ".github/workflows/e2e.yml",
+      ".github/workflows/e2e-live-orchestrator.yml",
+    ]) {
+      const text = readFileSync(file, "utf8");
+      const pins = [...text.matchAll(/(?:bun-version|BUN_VERSION):\s*"([^"]+)"/g)].map((m) => m[1]);
+      expect(pins.length).toBeGreaterThan(0);
+      for (const pin of pins) expect(pin).toBe(shipped as string);
+    }
   });
 });
 

@@ -1,9 +1,11 @@
 /**
  * Environment variable names the agent's shell is allowed to see. This is an
  * ALLOW-list, so secrets (provider keys, GitHub App key, GITHUB_TOKEN, INPUT_*)
- * are excluded by construction — they can never leak into LLM-directed shell
- * commands. `LocalShellBackend` starts with an empty env by default, so this
- * list is also what makes `git`/`node`/etc. resolvable at all.
+ * are never placed in the shell's environment. That alone doesn't isolate them:
+ * on the host, a command can still read the parent process's environment through
+ * `/proc`. Only `shell_sandbox: docker` puts them out of reach. Shell commands
+ * start with an empty env, so this list is also what makes `git`/`node`/etc.
+ * resolvable at all.
  */
 export const SHELL_ENV_ALLOWLIST = [
   "PATH",
@@ -43,7 +45,7 @@ export const SHELL_ENV_ALLOWLIST = [
   "RUNNER_TEMP",
 ];
 
-/** Build a curated, secret-free environment for the agent's shell. */
+/** Build the curated environment for the agent's shell. */
 export function buildShellEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
   for (const name of SHELL_ENV_ALLOWLIST) {

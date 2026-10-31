@@ -19,6 +19,10 @@ export interface StreamResult {
   stopDetail?: string;
   /** Deduplicated tool activity observed across main and subagent streams. */
   activities: StreamActivity[];
+  /** Estimated spend across all models, when every metered call could be priced. */
+  costUsd?: number;
+  /** The main agent's `responseFormat` result, when one was configured and produced. */
+  structuredResponse?: unknown;
 }
 
 export interface StreamActivity {
@@ -128,6 +132,12 @@ function toolCallFingerprints(
   return fingerprints;
 }
 
+/**
+ * Tools that change the repository: progress, so unchanged re-runs of a test
+ * command between them are a normal fix loop rather than a stall.
+ */
+const MUTATING_TOOLS = new Set(["write_file", "edit_file", "delete"]);
+
 function isRecursionLimitError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /recursion limit.*(?:reached|stop condition)/i.test(message);
@@ -175,15 +185,14 @@ export async function runAgentStream(
   let lastStagnationTodosKey = "";
   let stalled = false;
   let stopDetail: string | undefined;
+  let structuredResponse: unknown;
 
-  // A budget cap is enforced by a callback meter (which sees subagent calls too);
-  // a runtime cap by a timer. Both abort through the same controller, whose
-  // signal propagates into subagent invokes. (An un-aborted signal is inert, so
-  // the controller is created unconditionally.)
+  // Usage is always metered through a callback (which sees subagent calls too),
+  // and enforces a budget cap when one is set; a runtime cap uses a timer. Both
+  // abort through the same controller, whose signal propagates into subagent
+  // invokes. (An un-aborted signal is inert.)
   const controller = new AbortController();
-  const meter = options.budget
-    ? new BudgetMeter(options.budget.model, options.budget, controller)
-    : undefined;
+  const meter = new BudgetMeter(options.budget?.model ?? "", options.budget ?? {}, controller);
   let timedOut = false;
   const timer =
     options.maxRuntimeMs != null
@@ -202,13 +211,13 @@ export async function runAgentStream(
       // super-step ceiling, so the configured limit defaults well above it.
       recursionLimit: options.recursionLimit,
       signal: controller.signal,
-      ...(meter ? { callbacks: [meter] } : {}),
+      callbacks: [meter],
     });
 
     for await (const item of stream) {
       const { namespace, state } = extractState(item);
       if (!state || typeof state !== "object") continue;
-      const s = state as { todos?: unknown; messages?: unknown };
+      const s = state as { todos?: unknown; messages?: unknown; structuredResponse?: unknown };
       const stateMessages = Array.isArray(s.messages) ? s.messages.filter(isBaseMessage) : [];
       if (namespace.length === 0 && Array.isArray(s.todos)) {
         const nextTodos = mapTodos(s.todos);
@@ -222,6 +231,9 @@ export async function runAgentStream(
         if (repeatedToolCallKeys.has(fingerprint.callKey)) continue;
         repeatedToolCallKeys.add(fingerprint.callKey);
         const count = (repeatedToolCallCounts.get(fingerprint.key) ?? 0) + 1;
+        // An edit resets every other call's count, but keeps its own, so the same
+        // edit repeating forever still stalls.
+        if (MUTATING_TOOLS.has(fingerprint.name)) repeatedToolCallCounts.clear();
         repeatedToolCallCounts.set(fingerprint.key, count);
         if (options.maxRepeatedToolCalls != null && count >= options.maxRepeatedToolCalls) {
           stalled = true;
@@ -248,6 +260,7 @@ export async function runAgentStream(
         todosKey = JSON.stringify(todos); // re-keyed only when the plan changes
       }
       if (Array.isArray(s.messages)) finalMessages = s.messages.filter(isBaseMessage);
+      if (s.structuredResponse !== undefined) structuredResponse = s.structuredResponse;
 
       if (options.onProgress) {
         const now = Date.now();
@@ -262,8 +275,8 @@ export async function runAgentStream(
     // If the meter or the runtime timer deliberately aborted, whatever
     // cancellation error the stream produced is a clean early stop, not a
     // failure — swallow it regardless of its shape. Any other error propagates.
-    if (!meter?.stopped && !timedOut && !stalled && !isRecursionLimitError(err)) throw err;
-    if (!meter?.stopped && !timedOut && !stalled && isRecursionLimitError(err)) {
+    if (!meter.stopped && !timedOut && !stalled && !isRecursionLimitError(err)) throw err;
+    if (!meter.stopped && !timedOut && !stalled && isRecursionLimitError(err)) {
       stalled = true;
       stopDetail = "The agent reached its recursion ceiling without a stop condition.";
     }
@@ -280,21 +293,22 @@ export async function runAgentStream(
 
   // Report the larger of the meter total (includes subagent spend) and the
   // message-summed total (covers providers that report usage on messages but
-  // not via callbacks), so a metered run never under-reports vs an unmetered one.
+  // not via callbacks), so the callback path can never under-report.
   const summed = sumTokens(finalMessages);
-  const tokens = meter
-    ? {
-        input: Math.max(meter.total.input, summed.input),
-        output: Math.max(meter.total.output, summed.output),
-      }
-    : summed;
+  const tokens = {
+    input: Math.max(meter.total.input, summed.input),
+    output: Math.max(meter.total.output, summed.output),
+  };
+  const costUsd = meter.costUsd;
   return {
     todos,
     summary: lastAiText(finalMessages),
     tokens,
-    stopped: meter?.stopped ?? (timedOut ? "timeout" : stalled ? "stalled" : undefined),
+    stopped: meter.stopped ?? (timedOut ? "timeout" : stalled ? "stalled" : undefined),
     ...(stopDetail ? { stopDetail } : {}),
     activities,
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(structuredResponse !== undefined ? { structuredResponse } : {}),
   };
 }
 

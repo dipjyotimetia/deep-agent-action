@@ -66,3 +66,55 @@ describe("BudgetMeter", () => {
     expect(aborts).toBe(1);
   });
 });
+
+describe("BudgetMeter pricing", () => {
+  const start = (meter: BudgetMeter, runId: string, model: string) =>
+    meter.handleChatModelStart({} as any, [], runId, undefined, undefined, undefined, {
+      ls_model_name: model,
+    });
+
+  test("prices each call by the model that served it", () => {
+    const meter = new BudgetMeter("anthropic:claude-opus-4", {}, new AbortController());
+    start(meter, "main", "claude-opus-4");
+    meter.handleLLMEnd(resultWithUsage(1_000_000, 0), "main"); // $15
+    start(meter, "sub", "claude-haiku-4");
+    meter.handleLLMEnd(resultWithUsage(1_000_000, 0), "sub"); // $1
+    expect(meter.costUsd).toBe(16);
+  });
+
+  test("falls back to the model named on the response, then the configured model", () => {
+    const meter = new BudgetMeter("claude-sonnet-4", {}, new AbortController());
+    const named = resultWithUsage(1_000_000, 0);
+    named.generations[0][0].message.response_metadata = { model_name: "claude-haiku-4" };
+    meter.handleLLMEnd(named); // $1
+    meter.handleLLMEnd(resultWithUsage(1_000_000, 0)); // $3
+    expect(meter.costUsd).toBe(4);
+  });
+
+  test("a deployment name with no price uses the configured model's price", () => {
+    const meter = new BudgetMeter("claude-sonnet-4", {}, new AbortController());
+    start(meter, "r", "my-azure-deployment");
+    meter.handleLLMEnd(resultWithUsage(1_000_000, 0), "r");
+    expect(meter.costUsd).toBe(3);
+  });
+
+  test("reports no cost when any call could not be priced, but known spend still binds", () => {
+    const controller = new AbortController();
+    const meter = new BudgetMeter("unknown-model", { maxCostUsd: 2 }, controller);
+    meter.handleLLMEnd(resultWithUsage(1_000_000, 0)); // unpriced
+    expect(meter.costUsd).toBeUndefined();
+    expect(meter.stopped).toBeUndefined();
+    start(meter, "s", "claude-sonnet-4");
+    meter.handleLLMEnd(resultWithUsage(1_000_000, 0), "s"); // $3 known
+    expect(meter.costUsd).toBeUndefined();
+    expect(meter.stopped).toBe("budget");
+  });
+
+  test("with no limits it only meters", () => {
+    const controller = new AbortController();
+    const meter = new BudgetMeter("claude-sonnet-4", {}, controller);
+    meter.handleLLMEnd(resultWithUsage(10_000_000, 10_000_000));
+    expect(controller.signal.aborted).toBe(false);
+    expect(meter.total).toEqual({ input: 10_000_000, output: 10_000_000 });
+  });
+});

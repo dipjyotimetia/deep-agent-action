@@ -102,6 +102,18 @@ export interface Config {
   /** Immutable protected paths plus workflow-owner extensions that can never be published. */
   protectedPaths: string[];
   shellTimeoutSeconds: number;
+  /**
+   * Where model-directed shell commands run. `"none"` is the workflow accepting
+   * the runner as the boundary; `"auto"` means no image was configured, so runs
+   * driven by outside input are refused.
+   */
+  shellSandbox: "auto" | "none" | "docker";
+  /** Container image for `shellSandbox: "docker"`; required in that mode. */
+  shellSandboxImage?: string;
+  /** Container network for `shellSandbox: "docker"`. */
+  shellSandboxNetwork: "none" | "bridge";
+  /** Container network for stdio MCP servers under `shellSandbox: "docker"`. */
+  mcpSandboxNetwork: "none" | "bridge";
   /** Minimum interval between tracking-comment edits, ms. */
   commentDebounceMs: number;
   /** Abort the run once estimated spend reaches this many USD (needs a known model price). */

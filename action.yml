@@ -25,7 +25,7 @@ inputs:
     description: "Endpoint URL for the 'openai-compatible' provider (Groq, xAI, DeepSeek, Together, Ollama, vLLM, …)."
     required: false
   mcp_config:
-    description: 'MCP servers JSON: { "mcpServers": { name: { command, args, env } | { url } } }. Tools are exposed to the agent.'
+    description: 'MCP servers JSON: { "mcpServers": { name: { command, args, env } | { url } } }. Tools are exposed to the agent. With the Docker sandbox on, stdio servers run in containers too.'
     required: false
   harness_profile:
     description: >-
@@ -69,6 +69,25 @@ inputs:
     description: "Max seconds for a single shell command."
     required: false
     default: "600"
+  shell_sandbox:
+    description: >-
+      Where model-directed shell commands run. 'auto' uses Docker when shell_sandbox_image is set. Without an image
+      it refuses runs driven by outside input (fork PR code, or an issue someone other than the actor wrote) and warns
+      on the rest. 'docker' requires the image. 'none' explicitly accepts running on the runner, where commands can
+      read this action's secrets through /proc on Linux. Docker needs a Linux runner with a daemon.
+    required: false
+    default: "auto"
+  shell_sandbox_image:
+    description: "Container image providing your toolchain for sandboxed shell commands and stdio MCP servers. Pin it by digest. Setting this turns the sandbox on."
+    required: false
+  shell_sandbox_network:
+    description: "Container network for sandboxed shell commands: 'none' (default) or 'bridge', needed if commands install dependencies."
+    required: false
+    default: "none"
+  mcp_sandbox_network:
+    description: "Container network for sandboxed stdio MCP servers: 'bridge' (default) or 'none'."
+    required: false
+    default: "bridge"
   comment_debounce_ms:
     description: "Minimum interval between tracking-comment progress edits."
     required: false
@@ -96,7 +115,7 @@ inputs:
   protected_paths:
     description: >-
       Comma/newline-separated repository-relative globs for additional files the agent may never publish.
-      Repository .deepagents guidance and deep-agent config paths are always protected.
+      Repository .deepagents guidance, deep-agent config paths, and .github/workflows are always protected.
     required: false
   verified_commits:
     description: >-
@@ -180,7 +199,7 @@ inputs:
     required: false
     default: "150"
   max_repeated_tool_calls:
-    description: "Stop when the same tool call repeats without todo progress. Default 8; raise only for intentional repeated operations."
+    description: "Stop when the same tool call repeats with no todo progress or file edit in between. Default 8; raise only for intentional repeated operations."
     required: false
     default: "8"
 
@@ -256,6 +275,10 @@ runs:
         INPUT_AUTO_RUN_ASSIGNEE: ${{ inputs.auto_run_assignee }}
         INPUT_AUTO_RUN_DEFAULT_INSTRUCTION: ${{ inputs.auto_run_default_instruction }}
         INPUT_SHELL_TIMEOUT_SECONDS: ${{ inputs.shell_timeout_seconds }}
+        INPUT_SHELL_SANDBOX: ${{ inputs.shell_sandbox }}
+        INPUT_SHELL_SANDBOX_IMAGE: ${{ inputs.shell_sandbox_image }}
+        INPUT_SHELL_SANDBOX_NETWORK: ${{ inputs.shell_sandbox_network }}
+        INPUT_MCP_SANDBOX_NETWORK: ${{ inputs.mcp_sandbox_network }}
         INPUT_COMMENT_DEBOUNCE_MS: ${{ inputs.comment_debounce_ms }}
         INPUT_PROVIDER_API_KEY: ${{ inputs.provider_api_key }}
         INPUT_APP_ID: ${{ inputs.app_id }}

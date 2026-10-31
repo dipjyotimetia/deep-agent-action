@@ -1,8 +1,10 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 import type { Octokit } from "./client.js";
+import { isUntrustedPrHead } from "./fork.js";
 import { truncateBody } from "./text.js";
 import {
+  assertDirectPushAllowed,
   buildPrBody,
   commitTitle,
   compareUrl,
@@ -67,6 +69,23 @@ export function parsePorcelainStatus(porcelain: string): {
 }
 
 /**
+ * Read a changed file's bytes for publishing. A symlink is rejected when it
+ * leaves the checkout: this path publishes file contents rather than the link,
+ * so following one could put any file readable on the runner into a commit.
+ */
+function readPublishableFile(rootDir: string, path: string): Buffer {
+  const full = join(rootDir, path);
+  if (lstatSync(full).isSymbolicLink()) {
+    const root = realpathSync(rootDir);
+    const rel = relative(root, realpathSync(full));
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error(`Refusing to publish ${path}: it is a symlink leaving the repository.`);
+    }
+  }
+  return readFileSync(full);
+}
+
+/**
  * Compute the working tree's uncommitted changes as `createCommitOnBranch`
  * inputs. Every addition is read as raw bytes and base64-encoded (binary
  * safe). Known limitation: the GraphQL mutation has no file-mode field, so
@@ -74,12 +93,12 @@ export function parsePorcelainStatus(porcelain: string): {
  * as mode 100644 regardless of their mode in the working tree.
  */
 export function computeChangeset(rootDir: string): Changeset {
-  const porcelain = runGit(["status", "--porcelain"], rootDir);
+  const porcelain = runGit(["status", "--porcelain", "--untracked-files=all"], rootDir);
   const { additionPaths, deletionPaths } = parsePorcelainStatus(porcelain);
   return {
     additions: additionPaths.map((path) => ({
       path,
-      contents: readFileSync(join(rootDir, path)).toString("base64"),
+      contents: readPublishableFile(rootDir, path).toString("base64"),
     })),
     deletions: deletionPaths.map((path) => ({ path })),
     filesChanged: [...additionPaths, ...deletionPaths],
@@ -186,6 +205,8 @@ export async function landChangesVerified(params: {
   continuingBranch?: boolean;
   /** The repo's default branch; required for the issue/dispatch new-branch path. */
   baseBranch?: string;
+  /** The commit the agent started from; a fork PR's head has no branch here to look up. */
+  startSha?: string;
 }): Promise<LandResult> {
   const { octokit, ctx, rootDir, isPRMode, instruction, branchSuffix } = params;
 
@@ -201,7 +222,10 @@ export async function landChangesVerified(params: {
     }
     if (params.requireApproval) {
       const proposed = proposedBranchName(ctx, branchSuffix);
-      const baseOid = await getRefOid(octokit, ctx.owner, ctx.repo, ctx.prHeadRef);
+      const baseOid =
+        isUntrustedPrHead(ctx) && params.startSha
+          ? params.startSha
+          : await getRefOid(octokit, ctx.owner, ctx.repo, ctx.prHeadRef);
       await ensureRefExists(octokit, {
         owner: ctx.owner,
         repo: ctx.repo,
@@ -220,6 +244,7 @@ export async function landChangesVerified(params: {
       const compare = compareUrl(ctx, ctx.prHeadRef, proposed);
       return { filesChanged, branch: proposed, prUrl: compare, approvalPending: true };
     }
+    assertDirectPushAllowed(ctx);
     const headOid = await getRefOid(octokit, ctx.owner, ctx.repo, ctx.prHeadRef);
     await createCommitOnBranchMutation(octokit, {
       owner: ctx.owner,
