@@ -6,8 +6,11 @@
 [![E2E](https://github.com/dipjyotimetia/deep-agent-action/actions/workflows/e2e.yml/badge.svg)](https://github.com/dipjyotimetia/deep-agent-action/actions/workflows/e2e.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Built with Bun](https://img.shields.io/badge/built%20with-Bun-000000.svg?logo=bun)](https://bun.sh)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Deep%20Agent%20Action-blue.svg?logo=github)](https://github.com/marketplace/actions/deep-agent-action)
 
 Comment `@agent fix the failing test` on an issue and get a pull request back. Comment `@agent review` on a PR and get an inline code review. No hosted service, no extra infrastructure — the agent runs entirely inside your GitHub Actions runner, using a model provider of your choice.
+
+Project page: [Deep Agent Action](https://dipjyoti.dev/projects/deep-agent-action/).
 
 ---
 
@@ -138,6 +141,8 @@ The agent posts a tracking comment, works through a plan, and opens a pull reque
 > That's the whole setup. Everything else on this page is optional tuning. For a copy-paste-ready file with inline comments, see [`examples/agent.yml`](examples/agent.yml).
 
 ## Demo
+
+<!-- TODO: add a screenshot or GIF of an @agent comment and the resulting pull request. -->
 
 Want to see it work before wiring it into your repo? Run the **Demo** workflow (**Actions → Demo → Run workflow**) — it runs the agent on a visible task and opens a real pull request you can browse. The [E2E badge](https://github.com/dipjyotimetia/deep-agent-action/actions/workflows/e2e.yml) above also reflects a nightly live run that exercises the implement and approval-gate modes against this repo.
 
